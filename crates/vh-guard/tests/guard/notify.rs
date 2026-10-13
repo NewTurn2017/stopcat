@@ -98,3 +98,20 @@ fn send_failure_is_returned_and_queue_is_cleared() {
 fn null_notifier_sends_nothing() {
     assert_eq!(NullNotifier.notify("t", "b"), Ok(()));
 }
+
+#[test]
+fn queue_capped_and_overflow_counted_exactly() {
+    let mut b = NotifyBatcher::new(0);
+    for i in 0..150 {
+        b.push(format!("줄{i}"));
+    }
+    b.push("줄0");
+    assert_eq!(b.queued(), vh_guard::notify::MAX_QUEUED_LINES);
+    let mut send = |_: &str, _: &str| Ok(());
+    let (body, _) = b.flush(0, &mut send).unwrap();
+    assert!(body.ends_with(" 외 130건"), "{body}");
+    assert!(body.starts_with("줄0 · 줄1"), "먼저 온 줄을 보여 준다");
+    b.push("새 줄");
+    let (body, _) = b.flush(1, &mut send).unwrap();
+    assert_eq!(body, "새 줄", "보낸 뒤에는 넘친 수도 0부터");
+}

@@ -3,7 +3,7 @@
 use std::time::Instant;
 
 use vh_analyze::synth::synth_snapshot;
-use vh_guard::decide::decide;
+use vh_guard::decide::{decide, decide_lean};
 use vh_guard::memory::GuardMemory;
 use vh_guard::{AutoLevel, cpu};
 
@@ -23,6 +23,11 @@ fn perf_decide_2000_under_5ms() {
     let r2 = vh_analyze::analyze(&s2);
     let now = s2.taken_at_unix_ms;
     let policy = safe();
+    let lean_p50 = p50_us(|| {
+        std::hint::black_box(decide_lean(&m, &s2, &r2, &policy, now));
+    });
+    eprintln!("decide_lean 2000 procs: 5회 p50 = {lean_p50} µs");
+    assert!(lean_p50 <= 5_000, "decide_lean p50 {lean_p50} µs > 5ms");
     let mut samples_us = Vec::new();
     for _ in 0..5 {
         let mut runs = Vec::new();
@@ -51,4 +56,20 @@ fn perf_decide_2000_under_5ms() {
     );
     assert!(p50 <= 5_000, "decide p50 {p50} µs > 5ms");
     cpu::fill_cpu_pct(&mut s1, &GuardMemory::new(AutoLevel::Safe));
+}
+
+fn p50_us(mut f: impl FnMut()) -> u128 {
+    let mut samples = Vec::new();
+    for _ in 0..5 {
+        let mut runs = Vec::new();
+        for _ in 0..20 {
+            let t = Instant::now();
+            f();
+            runs.push(t.elapsed().as_micros());
+        }
+        runs.sort_unstable();
+        samples.push(runs[runs.len() / 2]);
+    }
+    samples.sort_unstable();
+    samples[samples.len() / 2]
 }

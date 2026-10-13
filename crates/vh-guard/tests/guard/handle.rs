@@ -1,17 +1,16 @@
 //! GUARD_5 스레드·손잡이. 기다림은 모두 채널 recv_timeout(상한 10초)로, 고정 sleep 없음.
 
-use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 use vh_guard::fake::*;
-use vh_guard::{AutoLevel, GuardCommand, GuardEventKind, GuardHandle, GuardUpdate};
+use vh_guard::{AutoLevel, GuardCommand, GuardEventKind, GuardHandle, GuardUpdate, UpdateReceiver};
 use vh_model::*;
 
 use crate::common::*;
 
 const WAIT: Duration = Duration::from_secs(10);
 
-fn next(rx: &Receiver<GuardUpdate>) -> GuardUpdate {
+fn next(rx: &UpdateReceiver) -> GuardUpdate {
     rx.recv_timeout(WAIT).expect("10초 안에 GuardUpdate")
 }
 
@@ -30,7 +29,7 @@ fn demoted_scene() -> (Scene, ProcRef) {
 }
 
 /// 폭주 자식을 4번 스캔해 Demote까지 만든다(ScanNow 4회, 각 갱신을 기다림).
-fn drive_to_demote(h: &GuardHandle, rx: &Receiver<GuardUpdate>, clock: &FakeClock) -> GuardUpdate {
+fn drive_to_demote(h: &GuardHandle, rx: &UpdateReceiver, clock: &FakeClock) -> GuardUpdate {
     let first = next(rx);
     assert_eq!(first.status.scan_seq, 1);
     let mut last = first;
@@ -173,4 +172,55 @@ fn spawn_with_env_lock_refuses_set_level() {
     assert_eq!(kinds(&u.new_events), vec![GuardEventKind::Refused]);
     h.send(GuardCommand::Shutdown).unwrap();
     let _ = h.shutdown();
+}
+
+#[test]
+fn updates_not_received_are_merged_and_none_lost() {
+    let sc = Scene::new();
+    let (be, _probe, _clock) = backend(&sc);
+    let mut policy = safe();
+    policy.scan_interval_ms = 600_000;
+    let (h, rx) = GuardHandle::spawn(policy, be);
+    assert_eq!(next(&rx).status.scan_seq, 1);
+    h.pause().unwrap();
+    h.resume().unwrap();
+    h.set_level(AutoLevel::NotifyOnly).unwrap();
+    let _ = h.shutdown();
+    let u = rx.try_recv().expect("합친 갱신 하나");
+    assert_eq!(
+        kinds(&u.new_events),
+        vec![
+            GuardEventKind::Paused,
+            GuardEventKind::Resumed,
+            GuardEventKind::LevelChanged
+        ]
+    );
+    assert_eq!(u.status.level, AutoLevel::NotifyOnly);
+    assert_eq!(
+        rx.try_recv().unwrap_err(),
+        std::sync::mpsc::TryRecvError::Disconnected
+    );
+}
+
+#[test]
+fn run_plan_result_is_kept_when_merged_with_later_updates() {
+    let sc = Scene::new();
+    let (be, _probe, _clock) = backend(&sc);
+    let mut policy = safe();
+    policy.scan_interval_ms = 600_000;
+    let (h, rx) = GuardHandle::spawn(policy, be);
+    let first = next(&rx);
+    let plan = ActionPlan {
+        created_at_unix_ms: T0,
+        total_deadline_ms: 1000,
+        items: Vec::new(),
+        refused: Vec::new(),
+    };
+    h.run_plan(7, plan, first.snapshot.clone()).unwrap();
+    h.pause().unwrap();
+    let _ = h.shutdown();
+    let u = rx.try_recv().expect("합친 갱신 하나");
+    assert_eq!(u.manual_result.map(|m| m.request_id), Some(7));
+    assert_eq!(kinds(&u.new_events), vec![GuardEventKind::Paused]);
+    assert!(rx.try_recv().is_err());
 }

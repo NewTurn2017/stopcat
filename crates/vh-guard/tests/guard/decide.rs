@@ -1,6 +1,6 @@
 //! GUARD_1·GUARD_2 판정(순수). 가짜 스냅샷·리포트만 쓴다(신호 0).
 
-use vh_guard::decide::{SkipReason, decide};
+use vh_guard::decide::{SkipReason, decide, decide_lean};
 use vh_guard::fake::*;
 use vh_guard::memory::{CpuStreak, GuardMemory};
 use vh_guard::{AutoLevel, GuardPolicy};
@@ -563,4 +563,76 @@ fn pressure_sets_scan_interval() {
     assert_eq!(decide(&m, &s, &r, &safe(), T0).next_scan_interval_ms, 2000);
     let (s, r) = sc.build_pressure(T0, 1);
     assert_eq!(decide(&m, &s, &r, &safe(), T0).next_scan_interval_ms, 5000);
+}
+
+fn assert_same_but_skipped(full: &vh_guard::Decisions, lean: &vh_guard::Decisions) {
+    assert_eq!(full.terminate, lean.terminate);
+    assert_eq!(full.demote, lean.demote);
+    assert_eq!(full.trip_circuit, lean.trip_circuit);
+    assert_eq!(full.pending, lean.pending);
+    assert_eq!(full.notify, lean.notify);
+    assert_eq!(full.next_term_streak, lean.next_term_streak);
+    assert_eq!(full.next_cpu_streak, lean.next_cpu_streak);
+    assert_eq!(full.next_scan_interval_ms, lean.next_scan_interval_ms);
+    assert!(lean.skipped.is_empty());
+}
+
+#[test]
+fn decide_lean_matches_decide_without_skips() {
+    let mut scenes = Vec::new();
+    let mut a = Scene::new();
+    a.leftover(
+        101,
+        Kind::McpServer,
+        Confidence::Confirmed,
+        OLD,
+        Some(false),
+    );
+    a.leftover(
+        102,
+        Kind::McpServer,
+        Confidence::Confirmed,
+        T0 - 1000,
+        Some(false),
+    );
+    a.leftover(103, Kind::AgentCli, Confidence::Confirmed, OLD, Some(false));
+    a.leftover(104, Kind::McpServer, Confidence::Possible, OLD, Some(false));
+    a.leftover(105, Kind::McpServer, Confidence::Confirmed, OLD, Some(true));
+    scenes.push(a);
+    let mut q = Scene::new();
+    for pid in 101..=106 {
+        q.leftover(
+            pid,
+            Kind::McpServer,
+            Confidence::Confirmed,
+            OLD,
+            Some(false),
+        );
+    }
+    scenes.push(q);
+    let (c, _) = cpu_scene(Kind::DevServer);
+    scenes.push(c);
+    let mut skipped_seen = 0;
+    for (si, sc) in scenes.iter().enumerate() {
+        for policy in [safe(), aggressive(), notify_only()] {
+            let mut m = mem(policy.level);
+            for i in 0..4u64 {
+                let now = T0 + i * 5000;
+                let (mut s, r) = sc.build(now);
+                if si == 2 {
+                    s.processes
+                        .iter_mut()
+                        .find(|p| p.pid == 201)
+                        .unwrap()
+                        .cpu_pct = Some(150.0);
+                }
+                let full = decide(&m, &s, &r, &policy, now);
+                let lean = decide_lean(&m, &s, &r, &policy, now);
+                assert_same_but_skipped(&full, &lean);
+                skipped_seen += full.skipped.len();
+                apply(&mut m, &full);
+            }
+        }
+    }
+    assert!(skipped_seen > 0, "비교한 장면에 실제로 제외 사유가 있었다");
 }

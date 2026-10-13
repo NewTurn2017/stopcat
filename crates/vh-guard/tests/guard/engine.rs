@@ -581,6 +581,139 @@ fn status_reflects_memory() {
     assert_eq!(u.status.last_scan_at_unix_ms, T0);
     assert_eq!(u.status.next_scan_at_unix_ms, T0 + 5000);
     assert_eq!(u.status.pending[0].kind, Kind::McpServer);
-    assert_eq!(u.policy, safe());
+    assert_eq!(*u.policy, safe());
     assert!(u.manual_result.is_none());
+}
+
+fn demote_201(e: &mut Engine<FakeGuardBackend>, probe: &Probe, clock: &FakeClock) {
+    e.backend_mut().cpu_rate_pct.insert(201, 180.0);
+    for _ in 0..4 {
+        scan(e, clock);
+    }
+    assert_eq!(probe.log.demoted(), vec![201]);
+    assert_eq!(e.status().demoted.len(), 1);
+}
+
+#[test]
+fn vanished_demoted_is_pruned_on_next_scan_once_without_signal() {
+    let mut sc = Scene::new();
+    sc.plain(201, Kind::DevServer, OLD);
+    let (mut e, probe, clock) = engine_for(&sc, safe());
+    demote_201(&mut e, &probe, &clock);
+    probe.world.with(|w| w.remove(201));
+    let u = scan(&mut e, &clock);
+    assert_eq!(count(&u.new_events, GuardEventKind::Undemoted), 1);
+    let ev = u
+        .new_events
+        .iter()
+        .find(|x| x.kind == GuardEventKind::Undemoted)
+        .unwrap();
+    assert!(ev.detail_ko.contains("이미 끝난"), "{}", ev.detail_ko);
+    assert!(u.status.demoted.is_empty());
+    assert!(probe.log.undemoted().is_empty(), "사라진 것에는 신호 0");
+    let u = scan(&mut e, &clock);
+    assert_eq!(
+        count(&u.new_events, GuardEventKind::Undemoted),
+        0,
+        "한 번만"
+    );
+    let (report, events) = e.restore_all();
+    assert!(report.undemoted.is_empty() && report.failed.is_empty());
+    assert!(events.is_empty());
+}
+
+#[test]
+fn pid_reuse_of_demoted_counts_as_gone_without_signal() {
+    let mut sc = Scene::new();
+    sc.plain(201, Kind::DevServer, OLD);
+    let (mut e, probe, clock) = engine_for(&sc, safe());
+    demote_201(&mut e, &probe, &clock);
+    probe.world.with(|w| {
+        w.remove(201);
+        w.insert(vh_act::LiveProc::alive(
+            201,
+            OLD + 1,
+            1,
+            UID,
+            Some("/opt/homebrew/bin/p201"),
+        ));
+    });
+    let mut sc2 = Scene::new();
+    sc2.plain(201, Kind::DevServer, OLD + 1);
+    let (s, r) = sc2.build(clock.now());
+    e.backend_mut().script.clear();
+    e.backend_mut().push_script(s, r);
+    let u = scan(&mut e, &clock);
+    assert_eq!(count(&u.new_events, GuardEventKind::Undemoted), 1);
+    assert!(u.status.demoted.is_empty());
+    assert!(probe.log.undemoted().is_empty(), "재사용된 PID에는 신호 0");
+}
+
+#[test]
+fn gone_undemote_failure_is_not_retried_every_scan_but_at_shutdown() {
+    let mut sc = Scene::new();
+    let a = sc.plain(201, Kind::DevServer, OLD);
+    let (mut e, probe, clock) = engine_for(&sc, safe());
+    demote_201(&mut e, &probe, &clock);
+    e.backend_mut().signaler = Box::new(SyncSignaler {
+        world: probe.world.clone(),
+        log: probe.log.clone(),
+        fail_with: Some(libc::EPERM),
+    });
+    let (s, r) = Scene::new().build(clock.now());
+    e.backend_mut().script.clear();
+    e.backend_mut().push_script(s, r);
+    let u = scan(&mut e, &clock);
+    assert_eq!(kinds(&u.new_events), vec![GuardEventKind::Refused]);
+    assert_eq!(u.status.demoted.len(), 1, "실패한 것은 목록에 남는다");
+    assert_eq!(probe.log.undemoted(), vec![201]);
+    let u = scan(&mut e, &clock);
+    assert!(u.new_events.is_empty(), "{:?}", kinds(&u.new_events));
+    assert_eq!(
+        probe.log.undemoted(),
+        vec![201],
+        "스캔마다 다시 시도하지 않는다"
+    );
+    let (report, _) = e.restore_all();
+    assert_eq!(report.failed, vec![(a, libc::EPERM)]);
+    assert_eq!(probe.log.undemoted(), vec![201, 201], "종료 때는 다시 시도");
+}
+
+#[test]
+fn buffered_events_capped_keeping_latest() {
+    let sc = Scene::new();
+    let (mut e, probe, _clock) = engine_for(&sc, safe());
+    for i in 0..150 {
+        probe.set_collect_error(Some(&format!("x{i}")));
+        assert!(e.scan().is_none());
+    }
+    probe.set_collect_error(None);
+    let u = e.scan().unwrap();
+    assert_eq!(
+        count(&u.new_events, GuardEventKind::ScanError),
+        vh_guard::engine::MAX_BUFFERED_EVENTS
+    );
+    assert!(
+        u.new_events[0].detail_ko.ends_with("x50"),
+        "{}",
+        u.new_events[0].detail_ko
+    );
+    assert!(u.new_events[99].detail_ko.ends_with("x149"));
+}
+
+#[test]
+fn policy_arc_is_shared_until_changed() {
+    let sc = Scene::new();
+    let (mut e, _probe, clock) = engine_for(&sc, safe());
+    let u1 = scan(&mut e, &clock);
+    let u2 = scan(&mut e, &clock);
+    assert!(Arc::ptr_eq(&u1.policy, &u2.policy));
+    let u3 = e.handle(GuardCommand::SetScanInterval(7000)).unwrap();
+    assert!(!Arc::ptr_eq(&u2.policy, &u3.policy));
+    assert_eq!(u3.policy.scan_interval_ms, 7000);
+    assert_eq!(
+        u2.policy.scan_interval_ms, 5000,
+        "이미 보낸 갱신의 값은 그대로"
+    );
+    assert_eq!(e.policy().scan_interval_ms, 7000);
 }
