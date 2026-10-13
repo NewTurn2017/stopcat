@@ -10,6 +10,15 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use serde::{Deserialize, Serialize};
+
+mod exec;
+mod fake;
+mod planner;
+mod protect;
+mod real;
+pub mod rule;
+mod store;
+
 use vh_model::{
     ActionOutcome, ActionPlan, Confidence, Kind, Proc, ProcRef, Refusal, Report, Snapshot,
 };
@@ -149,6 +158,8 @@ pub trait Prober {
     /// 실행 시점 조상 체인: `getppid` → ppid → … (최대 64단, 1 포함).
     fn ancestors_of_self(&self) -> Vec<i32>;
     /// `getpriority(PRIO_DARWIN_PROCESS, pid)`. Err(errno).
+    /// 주의(2026-10-13 실측): pid가 자기 자신이 아니면 대상의 DARWIN_BG 상태가 아니라 0을 돌려준다.
+    /// demote가 걸렸는지는 대상 task 우선순위(`PROC_PIDTASKINFO.pti_priority` = 4)로 확인한다.
     fn get_bg(&self, pid: i32) -> Result<i32, i32>;
     fn now_unix_ms(&self) -> u64;
     /// 가짜는 시계만 전진.
@@ -170,42 +181,6 @@ pub struct RealProber;
 /// 진짜 신호.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct RealSignaler;
-
-impl Prober for RealProber {
-    fn probe(&self, _pid: i32) -> LiveProc {
-        unimplemented!("vh-act 2b: 구현 중")
-    }
-    fn children(&self, _pid: i32) -> Vec<i32> {
-        unimplemented!("vh-act 2b: 구현 중")
-    }
-    fn self_pid(&self) -> i32 {
-        unimplemented!("vh-act 2b: 구현 중")
-    }
-    fn self_uid(&self) -> u32 {
-        unimplemented!("vh-act 2b: 구현 중")
-    }
-    fn ancestors_of_self(&self) -> Vec<i32> {
-        unimplemented!("vh-act 2b: 구현 중")
-    }
-    fn get_bg(&self, _pid: i32) -> Result<i32, i32> {
-        unimplemented!("vh-act 2b: 구현 중")
-    }
-    fn now_unix_ms(&self) -> u64 {
-        unimplemented!("vh-act 2b: 구현 중")
-    }
-    fn sleep_ms(&self, _ms: u64) {
-        unimplemented!("vh-act 2b: 구현 중")
-    }
-}
-
-impl Signaler for RealSignaler {
-    fn send(&self, _pid: i32, _sig: i32) -> Result<(), i32> {
-        unimplemented!("vh-act 2b: 구현 중")
-    }
-    fn demote(&self, _pid: i32) -> Result<(), i32> {
-        unimplemented!("vh-act 2b: 구현 중")
-    }
-}
 
 /// 가짜 세계: 가짜 prober·signaler가 같이 보는 프로세스 표.
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -242,42 +217,6 @@ pub struct FakeSignaler {
     pub demoted: RefCell<Vec<i32>>,
     /// Some(errno)면 모든 호출이 그 errno로 실패.
     pub fail_with: Option<i32>,
-}
-
-impl Prober for FakeProber {
-    fn probe(&self, _pid: i32) -> LiveProc {
-        unimplemented!("vh-act 2b: 구현 중")
-    }
-    fn children(&self, _pid: i32) -> Vec<i32> {
-        unimplemented!("vh-act 2b: 구현 중")
-    }
-    fn self_pid(&self) -> i32 {
-        unimplemented!("vh-act 2b: 구현 중")
-    }
-    fn self_uid(&self) -> u32 {
-        unimplemented!("vh-act 2b: 구현 중")
-    }
-    fn ancestors_of_self(&self) -> Vec<i32> {
-        unimplemented!("vh-act 2b: 구현 중")
-    }
-    fn get_bg(&self, _pid: i32) -> Result<i32, i32> {
-        unimplemented!("vh-act 2b: 구현 중")
-    }
-    fn now_unix_ms(&self) -> u64 {
-        unimplemented!("vh-act 2b: 구현 중")
-    }
-    fn sleep_ms(&self, _ms: u64) {
-        unimplemented!("vh-act 2b: 구현 중")
-    }
-}
-
-impl Signaler for FakeSignaler {
-    fn send(&self, _pid: i32, _sig: i32) -> Result<(), i32> {
-        unimplemented!("vh-act 2b: 구현 중")
-    }
-    fn demote(&self, _pid: i32) -> Result<(), i32> {
-        unimplemented!("vh-act 2b: 구현 중")
-    }
 }
 
 /// execute 실행 환경.
@@ -348,7 +287,7 @@ pub enum AuditEvent {
 /// 상태 폴더: `VH_STATE_DIR`(비어 있지 않으면) → 없으면 `$HOME/Library/Application Support/vibe-health`.
 /// 폴더가 없으면 0700으로 만든다.
 pub fn state_dir() -> std::io::Result<PathBuf> {
-    unimplemented!("vh-act 2b: 구현 중")
+    store::state_dir()
 }
 
 /// `<state>/audit.jsonl`
@@ -363,18 +302,15 @@ pub fn revive_dir(state_dir: &Path) -> PathBuf {
 
 /// 계획을 만든다. 신호 0회. 계획 시점 보호 규칙을 적용해 items·refused를 채운다.
 pub fn plan(s: &Snapshot, r: &Report, sel: &Selection, policy: &Policy) -> ActionPlan {
-    let _ = (s, r, sel, policy);
-    unimplemented!("vh-act 2b: 구현 중")
+    planner::plan(s, r, sel, policy)
 }
 
 /// 계획을 실행한다. 사용자에게 묻지 않는다. 결과는 `plan.items`와 같은 순서·개수.
 pub fn execute(plan: &ActionPlan, env: &ExecEnv<'_>) -> Vec<ActionOutcome> {
-    let _ = (plan, env.run_id.as_str());
-    unimplemented!("vh-act 2b: 구현 중")
+    exec::execute(plan, env)
 }
 
 /// 보호 규칙 평가(순수 함수). 처음 걸린 규칙(R01→R10 순)을 돌려준다.
 pub fn check_protection(ctx: &ProtectCtx<'_>) -> Option<Refusal> {
-    let _ = ctx;
-    unimplemented!("vh-act 2b: 구현 중")
+    protect::check(ctx)
 }
