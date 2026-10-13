@@ -5,16 +5,14 @@ use vh_model::{ExeOrigin, Kind, ProcStatus, Refusal, exe_origin};
 use crate::rule::*;
 use crate::{Liveness, ProtectCtx};
 
-/// R08: 강제로 끄지 않는 Kind. AgentHelper는 보호하지 않는다(PM 판정).
+/// R08: 강제로 끄지 않는 Kind. R09는 자손에 이 Kind가 있으면 대상 전체를 거부한다.
+/// AgentHelper는 보호하지 않는다(PM 판정).
 pub(crate) const PROTECTED_KINDS: [Kind; 4] = [
     Kind::AgentCli,
     Kind::GuiApp,
     Kind::VirtualMachine,
     Kind::Database,
 ];
-
-/// R09: 자손에 있으면 대상 전체를 거부하는 Kind.
-pub(crate) const SUBTREE_GUARD_KINDS: [Kind; 2] = [Kind::AgentCli, Kind::GuiApp];
 
 pub(crate) fn refusal(target: vh_model::ProcRef, rule: &str, reason_ko: &str) -> Refusal {
     Refusal {
@@ -92,11 +90,11 @@ pub(crate) fn check(ctx: &ProtectCtx<'_>) -> Option<Refusal> {
     if ctx
         .subtree_kinds
         .iter()
-        .any(|(_, k)| SUBTREE_GUARD_KINDS.contains(k))
+        .any(|(_, k)| PROTECTED_KINDS.contains(k))
     {
         return deny(
             R09_PROTECTED_IN_SUBTREE,
-            "이 프로세스 아래에 살아 있는 에이전트 세션 또는 앱이 있습니다. 먼저 그 세션을 정리하세요",
+            "이 프로세스 아래에 에이전트 세션·앱·VM·데이터베이스가 있습니다. 먼저 그쪽을 정리하세요",
         );
     }
     let zombie = match ctx.live {

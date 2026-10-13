@@ -15,3 +15,4 @@ pub const R12_DEMOTE_DISABLED: &str = "R12_demote_disabled";
 pub const R13_BELOW_CONFIDENCE: &str = "R13_below_confidence";
 pub const R14_START_TIME_MISMATCH: &str = "R14_start_time_mismatch";
 pub const R15_RUNTIME_CHILD_GUARD: &str = "R15_runtime_child_guard";
+pub const R16_MAX_ACTIONS: &str = "R16_max_actions";

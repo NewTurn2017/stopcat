@@ -255,10 +255,15 @@ fn r08_agent_helper_is_not_protected() {
 }
 
 #[test]
-fn r09_agent_in_subtree_refuses_even_without_descendants() {
+fn r09_protected_kind_in_subtree_refuses_even_without_descendants() {
     let shell = pref(2000, 7);
     let agent = pref(2001, 8);
-    for kind in [Kind::AgentCli, Kind::GuiApp] {
+    for kind in [
+        Kind::AgentCli,
+        Kind::GuiApp,
+        Kind::VirtualMachine,
+        Kind::Database,
+    ] {
         let mut fx = Fx::new(vec![user(2000, 1, 7), user(2001, 2000, 8)]);
         fx.rep = report(vec![classified(agent, kind)], Vec::new());
         for tree in [false, true] {
@@ -512,6 +517,75 @@ fn act1_descendant_count_reclaim_overlap_and_max_actions() {
     };
     let p = plan(&fx.snap, &fx.rep, &Selection::default(), &one);
     assert_eq!(ids(&p), vec!["parent"]);
+    assert_eq!(
+        refused_rule(&p, pref(3000, 7)).as_deref(),
+        Some(R16_MAX_ACTIONS)
+    );
+}
+
+#[test]
+fn r09_grandchild_database_refuses_and_agent_helper_does_not() {
+    let procs = vec![user(2000, 1, 7), user(2001, 2000, 8), user(2002, 2001, 9)];
+    let mut fx = Fx::new(procs);
+    fx.rep = report(vec![classified(pref(2002, 9), Kind::Database)], Vec::new());
+    let p = fx.plan_direct(&[pref(2000, 7)], true);
+    assert!(p.items.is_empty());
+    assert_eq!(
+        refused_rule(&p, pref(2000, 7)).as_deref(),
+        Some(R09_PROTECTED_IN_SUBTREE)
+    );
+    let r = run_fake(&fx, &p, world_from(&fx.snap), Vec::new());
+    assert_eq!(r.sig.calls(), 0);
+
+    fx.rep = report(
+        vec![classified(pref(2002, 9), Kind::AgentHelper)],
+        Vec::new(),
+    );
+    let p = fx.plan_direct(&[pref(2000, 7)], true);
+    assert_eq!(p.items.len(), 1);
+    assert!(p.refused.is_empty());
+}
+
+#[test]
+fn r16_items_over_max_actions_are_refused_not_dropped() {
+    let mut fx = Fx::new((0..5).map(|i| user(2000 + i, 1, 10 + i as u64)).collect());
+    fx.rep = report(
+        Vec::new(),
+        (0..5)
+            .map(|i| {
+                finding(
+                    &format!("f{i}"),
+                    Confidence::Confirmed,
+                    vec![pref(2000 + i, 10 + i as u64)],
+                    Suggestion::Terminate {
+                        include_descendants: false,
+                    },
+                )
+            })
+            .collect(),
+    );
+    let policy = Policy {
+        max_actions: 3,
+        ..Policy::default()
+    };
+    let p = plan(&fx.snap, &fx.rep, &Selection::default(), &policy);
+    assert_eq!(ids(&p), vec!["f0", "f1", "f2"]);
+    let cut: Vec<(i32, &str, &str)> = p
+        .refused
+        .iter()
+        .map(|r| (r.target.pid, r.rule.as_str(), r.reason_ko.as_str()))
+        .collect();
+    let reason = "한 번에 정리할 수 있는 개수(3)를 넘었어요";
+    assert_eq!(
+        cut,
+        vec![
+            (2003, R16_MAX_ACTIONS, reason),
+            (2004, R16_MAX_ACTIONS, reason)
+        ]
+    );
+    let r = run_fake(&fx, &p, world_from(&fx.snap), Vec::new());
+    let sent: Vec<i32> = r.sig.sent.borrow().iter().map(|(p, _)| *p).collect();
+    assert_eq!(sent, vec![2000, 2001, 2002]);
 }
 
 #[test]

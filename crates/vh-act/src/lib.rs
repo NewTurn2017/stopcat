@@ -301,6 +301,10 @@ pub fn revive_dir(state_dir: &Path) -> PathBuf {
 }
 
 /// 계획을 만든다. 신호 0회. 계획 시점 보호 규칙을 적용해 items·refused를 채운다.
+///
+/// `PlannedAction.est_reclaim_bytes` = 스냅샷 `footprint_bytes` 합(대상, 자손 포함이면 스냅샷 자손까지).
+/// `Finding.reclaim_bytes`를 그대로 옮기지 않는다. demote·resume 항목은 0.
+/// `policy.max_actions`를 넘는 항목은 버리지 않고 `R16_max_actions` 거부로 남긴다.
 pub fn plan(s: &Snapshot, r: &Report, sel: &Selection, policy: &Policy) -> ActionPlan {
     planner::plan(s, r, sel, policy)
 }

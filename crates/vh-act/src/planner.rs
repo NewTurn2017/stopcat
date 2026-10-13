@@ -287,7 +287,15 @@ pub(crate) fn plan(s: &Snapshot, r: &Report, sel: &Selection, policy: &Policy) -
             .iter()
             .any(|(owner, set)| *owner != i.target && set.contains(&i.target))
     });
-    items.truncate(policy.max_actions);
+    if items.len() > policy.max_actions {
+        let reason = format!(
+            "한 번에 정리할 수 있는 개수({})를 넘었어요",
+            policy.max_actions
+        );
+        for cut in items.split_off(policy.max_actions) {
+            refused.push(refusal(cut.target, R16_MAX_ACTIONS, &reason));
+        }
+    }
 
     ActionPlan {
         created_at_unix_ms: now_ms(),
