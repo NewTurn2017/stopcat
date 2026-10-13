@@ -940,6 +940,17 @@ dependencies = [
 [[package]]
 name = "vh-lab"
 version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "vh-act",
+ "vh-analyze",
+ "vh-guard",
+ "vh-model",
+ "vh-sample",
+]
 
 [[package]]
 name = "vh-model"
