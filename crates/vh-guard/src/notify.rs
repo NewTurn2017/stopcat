@@ -75,12 +75,16 @@ impl Drop for OsascriptNotifier {
     }
 }
 
+/// 큐에 두는 서로 다른 줄의 상한. 넘친 줄은 버리고 수만 세어 본문 끝 '외 N건'에 넣는다.
+pub const MAX_QUEUED_LINES: usize = 100;
+
 /// 묶음과 속도 제한. 못 보낸 줄은 큐에 모였다가 다음 허용 시점에 한 번에 나간다(버리지 않는다).
 #[derive(Debug, Clone, PartialEq)]
 pub struct NotifyBatcher {
     min_interval_ms: u64,
     last_sent_at_unix_ms: Option<u64>,
     queued: Vec<String>,
+    overflow: usize,
     max_lines: usize,
     max_body_chars: usize,
 }
@@ -91,6 +95,7 @@ impl NotifyBatcher {
             min_interval_ms,
             last_sent_at_unix_ms: None,
             queued: Vec::new(),
+            overflow: 0,
             max_lines: 20,
             max_body_chars: 240,
         }
@@ -102,9 +107,14 @@ impl NotifyBatcher {
 
     pub fn push(&mut self, line: impl Into<String>) {
         let line = line.into();
-        if !line.is_empty() && !self.queued.contains(&line) {
-            self.queued.push(line);
+        if line.is_empty() || self.queued.contains(&line) {
+            return;
         }
+        if self.queued.len() >= MAX_QUEUED_LINES {
+            self.overflow += 1;
+            return;
+        }
+        self.queued.push(line);
     }
 
     pub fn queued(&self) -> usize {
@@ -131,12 +141,13 @@ impl NotifyBatcher {
         let res = send(TITLE_KO, &body);
         self.last_sent_at_unix_ms = Some(now_ms);
         self.queued.clear();
+        self.overflow = 0;
         Some((body, res))
     }
 
     fn compose(&self) -> String {
         let mut lines: Vec<&str> = self.queued.iter().map(String::as_str).collect();
-        let extra = lines.len().saturating_sub(self.max_lines);
+        let extra = lines.len().saturating_sub(self.max_lines) + self.overflow;
         lines.truncate(self.max_lines);
         let mut body = lines.join(" · ");
         if extra > 0 {

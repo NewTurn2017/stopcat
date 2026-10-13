@@ -154,13 +154,35 @@ fn pref(p: &Proc) -> ProcRef {
     }
 }
 
-/// 이번 스캔에 할 일을 정한다.
+/// 이번 스캔에 할 일을 정한다. `skipped`에 제외 사유를 모두 채운다(테스트·실험실 그림자 판정용).
 pub fn decide(
     prev: &GuardMemory,
     snapshot: &Snapshot,
     report: &Report,
     policy: &GuardPolicy,
     now_ms: u64,
+) -> Decisions {
+    decide_impl(prev, snapshot, report, policy, now_ms, true)
+}
+
+/// [`decide`]와 같은 판정이되 `skipped`를 만들지 않는다(엔진이 쓰는 제품 경로, 스캔당 할당 감소).
+pub fn decide_lean(
+    prev: &GuardMemory,
+    snapshot: &Snapshot,
+    report: &Report,
+    policy: &GuardPolicy,
+    now_ms: u64,
+) -> Decisions {
+    decide_impl(prev, snapshot, report, policy, now_ms, false)
+}
+
+fn decide_impl(
+    prev: &GuardMemory,
+    snapshot: &Snapshot,
+    report: &Report,
+    policy: &GuardPolicy,
+    now_ms: u64,
+    record_skips: bool,
 ) -> Decisions {
     let interval = next_scan_interval_ms(policy, snapshot.memory.pressure_level);
     let mut d = Decisions {
@@ -188,6 +210,7 @@ pub fn decide(
         &idx,
         &mut d,
         &mut terminate,
+        record_skips,
     );
     apply_quota(
         prev,
@@ -197,7 +220,7 @@ pub fn decide(
         terminate,
         &mut d,
     );
-    decide_demotes(prev, snapshot, policy, &idx, &mut d);
+    decide_demotes(prev, snapshot, policy, &idx, &mut d, record_skips);
     d
 }
 
@@ -211,9 +234,13 @@ fn decide_terminations(
     idx: &Index<'_>,
     d: &mut Decisions,
     out: &mut Vec<Candidate>,
+    record_skips: bool,
 ) {
     let level_notify_only = policy.auto_terminate_kinds.is_empty();
     let mut skip = |t: ProcRef, fid: &str, reason: SkipReason| {
+        if !record_skips {
+            return;
+        }
         d.skipped.push(Skip {
             target: t,
             finding_id: Some(fid.to_string()),
@@ -398,6 +425,7 @@ fn decide_demotes(
     policy: &GuardPolicy,
     idx: &Index<'_>,
     d: &mut Decisions,
+    record_skips: bool,
 ) {
     if !policy.auto_demote {
         return;
@@ -449,27 +477,33 @@ fn decide_demotes(
             continue;
         }
         if prev.demoted.contains_key(&t) {
-            d.skipped.push(Skip {
-                target: t,
-                finding_id: Some(finding_id),
-                reason: SkipReason::AlreadyDemoted,
-            });
+            if record_skips {
+                d.skipped.push(Skip {
+                    target: t,
+                    finding_id: Some(finding_id),
+                    reason: SkipReason::AlreadyDemoted,
+                });
+            }
             continue;
         }
         if prev.refused.contains(&t) {
-            d.skipped.push(Skip {
-                target: t,
-                finding_id: Some(finding_id),
-                reason: SkipReason::RefusedBefore,
-            });
+            if record_skips {
+                d.skipped.push(Skip {
+                    target: t,
+                    finding_id: Some(finding_id),
+                    reason: SkipReason::RefusedBefore,
+                });
+            }
             continue;
         }
         if seen < policy.runaway_sustained_scans {
-            d.skipped.push(Skip {
-                target: t,
-                finding_id: Some(finding_id.clone()),
-                reason: SkipReason::CpuNotSustained,
-            });
+            if record_skips {
+                d.skipped.push(Skip {
+                    target: t,
+                    finding_id: Some(finding_id.clone()),
+                    reason: SkipReason::CpuNotSustained,
+                });
+            }
             d.pending.push(PendingAction {
                 target: t,
                 finding_id,

@@ -11,7 +11,7 @@ use vh_model::{
 
 use crate::backend::GuardBackend;
 use crate::cpu::{fill_cpu_pct, remember};
-use crate::decide::{Candidate, NotifyItem, SkipReason, decide};
+use crate::decide::{Candidate, NotifyItem, SkipReason, decide_lean};
 use crate::handle::{GuardCommand, GuardUpdate, ManualRunResult, ShutdownReport};
 use crate::memory::{Demoted, GuardMemory};
 use crate::notify::NotifyBatcher;
@@ -20,10 +20,13 @@ use crate::snap::bare_snapshot;
 /// 한 번의 자동 실행(execute)이 쓸 수 있는 총 시간.
 pub const EXEC_DEADLINE_MS: u64 = 20_000;
 
+/// 첫 스캔 전(첫 수집이 계속 실패할 때) 모아 두는 이벤트 상한. 넘으면 오래된 것부터 버린다.
+pub const MAX_BUFFERED_EVENTS: usize = 100;
+
 const GUARD_LABEL: &str = "지킴이";
 
 pub struct Engine<B: GuardBackend> {
-    policy: GuardPolicy,
+    policy: Arc<GuardPolicy>,
     mem: GuardMemory,
     backend: B,
     batcher: NotifyBatcher,
@@ -43,7 +46,7 @@ impl<B: GuardBackend> Engine<B> {
         Engine {
             batcher: NotifyBatcher::new(policy.notify_min_interval_ms),
             mem: GuardMemory::new(policy.level),
-            policy,
+            policy: Arc::new(policy),
             backend,
             last: None,
             level_locked_by_env: false,
@@ -123,6 +126,11 @@ impl<B: GuardBackend> Engine<B> {
     ) -> Option<GuardUpdate> {
         let Some((snapshot, report)) = self.last.clone() else {
             self.buffered_events.append(&mut events);
+            let over = self
+                .buffered_events
+                .len()
+                .saturating_sub(MAX_BUFFERED_EVENTS);
+            self.buffered_events.drain(..over);
             return None;
         };
         let mut new_events = std::mem::take(&mut self.buffered_events);
@@ -130,7 +138,7 @@ impl<B: GuardBackend> Engine<B> {
         Some(GuardUpdate {
             snapshot,
             report,
-            policy: self.policy.clone(),
+            policy: Arc::clone(&self.policy),
             status: self.status(),
             new_events,
             manual_result,
@@ -159,7 +167,7 @@ impl<B: GuardBackend> Engine<B> {
         fill_cpu_pct(&mut snapshot, &self.mem);
         let report = self.backend.analyze(&snapshot);
         let now = self.now_unix_ms();
-        let d = decide(&self.mem, &snapshot, &report, &self.policy, now);
+        let d = decide_lean(&self.mem, &snapshot, &report, &self.policy, now);
         self.mem.term_streak = d.next_term_streak;
         self.mem.cpu_streak = d.next_cpu_streak;
         remember(&mut self.mem, &snapshot);
@@ -209,6 +217,7 @@ impl<B: GuardBackend> Engine<B> {
             .collect();
         self.mem.notified.retain(|(t, _)| alive.contains(t));
         self.mem.refused.retain(|t| alive.contains(t));
+        self.prune_gone_demoted(&alive, &mut events);
 
         self.flush_notifications(now, &mut events);
 
@@ -258,7 +267,7 @@ impl<B: GuardBackend> Engine<B> {
             GuardCommand::SetScanInterval(ms) => {
                 let ms = ms.max(1_000);
                 if ms != self.policy.scan_interval_ms {
-                    self.policy.scan_interval_ms = ms;
+                    Arc::make_mut(&mut self.policy).scan_interval_ms = ms;
                     let now = self.now_unix_ms();
                     self.next_scan_at_unix_ms = self.next_scan_at_unix_ms.min(now + u64::from(ms));
                 }
@@ -349,8 +358,9 @@ impl<B: GuardBackend> Engine<B> {
         }
         let old = self.policy.level;
         let interval = self.policy.scan_interval_ms;
-        self.policy = GuardPolicy::for_level(level);
-        self.policy.scan_interval_ms = interval;
+        let mut policy = GuardPolicy::for_level(level);
+        policy.scan_interval_ms = interval;
+        self.policy = Arc::new(policy);
         self.batcher
             .set_min_interval_ms(self.policy.notify_min_interval_ms);
         self.mem.level = level;
@@ -742,6 +752,28 @@ impl<B: GuardBackend> Engine<B> {
             }
         }
         report
+    }
+
+    /// 스냅샷에서 사라진 낮춘 대상을 기존 되돌리기 경로로 정리한다. vh-act의 신호 직전 확인이
+    /// 끝남·PID 재사용을 신호 없이 판정하므로 보통 Undemoted('이미 끝난') 이벤트 1회로 끝나고,
+    /// 수집에서만 빠지고 살아 있으면 실제로 되돌린다. 되돌리기에 실패한 것은 목록에 남겨 종료 때
+    /// 다시 시도하되 스캔마다 반복하지 않는다.
+    fn prune_gone_demoted(&mut self, alive: &HashSet<ProcRef>, events: &mut Vec<GuardEvent>) {
+        let gone: Vec<ProcRef> = self
+            .mem
+            .demoted
+            .keys()
+            .filter(|t| !alive.contains(t) && !self.mem.undemote_failed.contains(t))
+            .copied()
+            .collect();
+        if !gone.is_empty() {
+            let report = self.undo_demote(&gone, "guard-gone", events);
+            self.mem
+                .undemote_failed
+                .extend(report.failed.iter().map(|(t, _)| *t));
+        }
+        let demoted = &self.mem.demoted;
+        self.mem.undemote_failed.retain(|t| demoted.contains_key(t));
     }
 
     fn demoted_label(&self, t: ProcRef) -> String {

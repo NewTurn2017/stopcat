@@ -18,6 +18,7 @@ pub mod engine;
 pub mod fake;
 pub mod handle;
 pub mod lock;
+pub mod mailbox;
 pub mod memory;
 pub mod notify;
 pub mod snap;
@@ -29,12 +30,13 @@ pub use vh_model::{
 
 pub use backend::{GuardBackend, RealGuardBackend};
 pub use cpu::{fill_cpu_pct, next_scan_interval_ms};
-pub use decide::{Candidate, Decisions, NotifyItem, Skip, SkipReason, decide};
+pub use decide::{Candidate, Decisions, NotifyItem, Skip, SkipReason, decide, decide_lean};
 pub use engine::Engine;
 pub use handle::{
     GuardCommand, GuardGone, GuardHandle, GuardUpdate, ManualRunResult, ShutdownReport,
 };
 pub use lock::AllowListSignaler;
+pub use mailbox::{UpdateReceiver, UpdateSender, mailbox};
 pub use memory::{CpuStreak, Demoted, GuardMemory, Streak};
 pub use notify::{Notifier, NotifyBatcher, NullNotifier, OsascriptNotifier, osascript_argv};
 

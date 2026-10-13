@@ -56,6 +56,9 @@ pub struct GuardMemory {
     pub notified: HashSet<(ProcRef, SkipReason)>,
     /// 계획·실행 단계에서 거부되거나 실패한 대상. 다시 시도·기록하지 않는다(수준 변경·차단기 해제 때 비움).
     pub refused: HashSet<ProcRef>,
+    /// 사라진 것으로 보여 되돌리려다 실패한 낮춘 대상. 스캔마다 다시 시도하지 않고 종료 때만 다시 시도한다
+    /// (`demoted`에서 빠지면 함께 지운다).
+    pub undemote_failed: HashSet<ProcRef>,
 }
 
 impl GuardMemory {
@@ -74,6 +77,7 @@ impl GuardMemory {
             level,
             notified: HashSet::new(),
             refused: HashSet::new(),
+            undemote_failed: HashSet::new(),
         }
     }
 

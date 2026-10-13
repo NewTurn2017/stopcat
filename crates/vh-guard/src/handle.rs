@@ -15,6 +15,7 @@ use vh_model::{
 
 use crate::backend::GuardBackend;
 use crate::engine::Engine;
+use crate::mailbox::{UpdateReceiver, UpdateSender, mailbox};
 
 /// 화면 → 지킴이. 보내기는 막히지 않는다.
 #[derive(Debug, Clone)]
@@ -49,7 +50,7 @@ pub struct ManualRunResult {
 pub struct GuardUpdate {
     pub snapshot: Arc<Snapshot>,
     pub report: Arc<Report>,
-    pub policy: GuardPolicy,
+    pub policy: Arc<GuardPolicy>,
     pub status: GuardStatus,
     pub new_events: Vec<GuardEvent>,
     pub manual_result: Option<ManualRunResult>,
@@ -94,7 +95,7 @@ impl GuardHandle {
     pub fn spawn<B: GuardBackend>(
         policy: GuardPolicy,
         backend: B,
-    ) -> (GuardHandle, Receiver<GuardUpdate>) {
+    ) -> (GuardHandle, UpdateReceiver) {
         Self::spawn_with(policy, backend, false)
     }
 
@@ -103,9 +104,9 @@ impl GuardHandle {
         policy: GuardPolicy,
         backend: B,
         level_locked_by_env: bool,
-    ) -> (GuardHandle, Receiver<GuardUpdate>) {
+    ) -> (GuardHandle, UpdateReceiver) {
         let (cmd_tx, cmd_rx) = mpsc::channel::<GuardCommand>();
-        let (upd_tx, upd_rx) = mpsc::channel::<GuardUpdate>();
+        let (upd_tx, upd_rx) = mailbox();
         let join = std::thread::Builder::new()
             .name("vh-guard".to_string())
             .spawn(move || {
@@ -202,7 +203,7 @@ impl Drop for GuardHandle {
 fn run_loop<B: GuardBackend>(
     engine: &mut Engine<B>,
     rx: &Receiver<GuardCommand>,
-    tx: &Sender<GuardUpdate>,
+    tx: &UpdateSender,
 ) {
     if !scan_and_send(engine, tx) {
         return;
@@ -234,7 +235,7 @@ fn run_loop<B: GuardBackend>(
 }
 
 /// false = 수신자가 사라졌다(되돌리고 끝낸다).
-fn scan_and_send<B: GuardBackend>(engine: &mut Engine<B>, tx: &Sender<GuardUpdate>) -> bool {
+fn scan_and_send<B: GuardBackend>(engine: &mut Engine<B>, tx: &UpdateSender) -> bool {
     let update = match catch_unwind(AssertUnwindSafe(|| engine.scan())) {
         Ok(u) => u,
         Err(p) => engine.record_panic("스캔", &p),
