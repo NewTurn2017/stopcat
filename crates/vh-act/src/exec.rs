@@ -130,7 +130,7 @@ impl<'e, 'a> Run<'e, 'a> {
             Step::Cont => (libc::SIGCONT, AuditEvent::Cont),
             Step::Term => (libc::SIGTERM, AuditEvent::Term),
             Step::Kill => (libc::SIGKILL, AuditEvent::Kill),
-            Step::Demote => unreachable!("demote는 send를 쓰지 않는다"),
+            Step::Demote | Step::Undemote => unreachable!("demote·undemote는 send를 쓰지 않는다"),
         };
         let res = self.env.signaler.send(pid, sig);
         it.steps.push(StepResult {

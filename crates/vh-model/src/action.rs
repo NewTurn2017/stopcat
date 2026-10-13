@@ -14,6 +14,8 @@ pub enum Step {
     Term,
     Kill,
     Demote,
+    /// `setpriority(PRIO_DARWIN_PROCESS, pid, 0)`: Demote를 되돌린다(W2).
+    Undemote,
 }
 
 /// 계획된 조치 한 건.

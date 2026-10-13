@@ -43,6 +43,7 @@ pub fn ladder(a: &PlannedAction) -> String {
             Step::Term => "정상 종료".to_string(),
             Step::Kill => format!("{} 기다림 → 안 꺼지면 강제 종료", fmt::secs(a.grace_ms)),
             Step::Demote => "우선순위 낮추기".to_string(),
+            Step::Undemote => "우선순위 되돌리기".to_string(),
         })
         .collect();
     parts.join(" → ")
