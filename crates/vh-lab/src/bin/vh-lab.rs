@@ -2,10 +2,17 @@ use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
 
-const USAGE: &str = "사용법: vh-lab <preflight|isolation-check|prepare-vh> [옵션]
+const USAGE: &str = "사용법: vh-lab <명령> [옵션]
   preflight --out <파일> [--vh <원본> --vh-copy <복사본> --vh-sha256 <값>]
   isolation-check --out <폴더> --report <파일>
-  prepare-vh --src <원본> --dest <복사본> --sha256 <값>";
+  prepare-vh --src <원본> --dest <복사본> --sha256 <값>
+  scenarios --out <폴더> [--only A,B,C]
+  soak --vh <복사본> --vh-sha256 <값> --minutes <분> --sample-secs <초> --out <폴더>
+  interval-ab --vh <복사본> --vh-sha256 <값> --minutes 15 --intervals 5000,30000 --out <폴더>
+  stress --max-procs <≤300> --storm-secs <≤60> --out <폴더>
+  edge --vh <복사본> --vh-sha256 <값> --out <폴더>
+  findings --run-dir <폴더> --out <파일> --repo <작업트리> --lab-build-sha <sha> --vh-sha256 <값> [--isolation <파일>]
+  privacy-check --dir <폴더> --out <파일> [--allow <접두사>]...";
 
 fn opt(args: &[String], name: &str) -> Option<String> {
     args.iter()
@@ -19,8 +26,25 @@ fn need(args: &[String], name: &str) -> Result<PathBuf, String> {
         .ok_or_else(|| format!("{name} 필요\n{USAGE}"))
 }
 
+fn num(args: &[String], name: &str, default: u64) -> Result<u64, String> {
+    match opt(args, name) {
+        Some(v) => v.parse().map_err(|_| format!("{name} 숫자 필요")),
+        None => Ok(default),
+    }
+}
+
 fn supervised(cmd: &str) -> bool {
-    matches!(cmd, "preflight" | "isolation-check" | "kill-probe-lab")
+    matches!(
+        cmd,
+        "preflight"
+            | "isolation-check"
+            | "kill-probe-lab"
+            | "scenarios"
+            | "soak"
+            | "interval-ab"
+            | "stress"
+            | "edge"
+    )
 }
 
 /// 실험실을 띄우는 명령은 setsid로 새 세션(제어 터미널 없음)에서 자기 자신을 다시 실행해 돌린다.
@@ -86,6 +110,77 @@ fn run(args: &[String]) -> Result<bool, String> {
             .map_err(io)?;
             println!("{}", serde_json::to_string_pretty(&c).unwrap_or_default());
             Ok(c.matches)
+        }
+        "scenarios" => {
+            let only = opt(rest, "--only")
+                .map(|s| s.split(',').map(|x| x.trim().to_string()).collect())
+                .unwrap_or_default();
+            vh_lab::scenarios::run(&need(rest, "--out")?, &only).map_err(io)
+        }
+        "soak" => vh_lab::soak::soak(
+            &need(rest, "--vh")?,
+            &opt(rest, "--vh-sha256").ok_or("--vh-sha256 필요")?,
+            num(rest, "--minutes", 60)?,
+            num(rest, "--sample-secs", 5)?,
+            &need(rest, "--out")?,
+        )
+        .map_err(io),
+        "interval-ab" => {
+            let ivs: Vec<u32> = opt(rest, "--intervals")
+                .unwrap_or_else(|| "5000,30000".into())
+                .split(',')
+                .filter_map(|x| x.trim().parse().ok())
+                .collect();
+            vh_lab::soak::interval_ab(
+                &need(rest, "--vh")?,
+                &opt(rest, "--vh-sha256").ok_or("--vh-sha256 필요")?,
+                num(rest, "--minutes", 15)?,
+                &ivs,
+                &need(rest, "--out")?,
+            )
+            .map_err(io)
+        }
+        "stress" => vh_lab::stress::run(
+            num(rest, "--max-procs", 300)? as usize,
+            num(rest, "--storm-secs", 60)?,
+            &need(rest, "--out")?,
+        )
+        .map_err(io),
+        "edge" => vh_lab::edge::run(
+            &need(rest, "--vh")?,
+            &opt(rest, "--vh-sha256").ok_or("--vh-sha256 필요")?,
+            &need(rest, "--out")?,
+        )
+        .map_err(io),
+        "findings" => {
+            let iso = opt(rest, "--isolation").map(PathBuf::from);
+            let lab_sha = opt(rest, "--lab-build-sha").ok_or("--lab-build-sha 필요")?;
+            let vh_sha = opt(rest, "--vh-sha256").ok_or("--vh-sha256 필요")?;
+            let run_dir = need(rest, "--run-dir")?;
+            let out = need(rest, "--out")?;
+            let repo = need(rest, "--repo")?;
+            vh_lab::findings::write_findings(&vh_lab::findings::Inputs {
+                run_dir: &run_dir,
+                out: &out,
+                repo: &repo,
+                lab_build_sha: &lab_sha,
+                vh_sha256: &vh_sha,
+                isolation: iso.as_deref(),
+            })
+            .map(|_| true)
+            .map_err(io)
+        }
+        "privacy-check" => {
+            let extra: Vec<String> = rest
+                .windows(2)
+                .filter(|w| w[0] == "--allow")
+                .map(|w| w[1].clone())
+                .collect();
+            let allowed = vh_lab::findings::default_allowed(&extra);
+            let v = vh_lab::findings::privacy_check(&need(rest, "--dir")?, &allowed).map_err(io)?;
+            let out = need(rest, "--out")?;
+            vh_lab::util::write_json(&out, &v).map_err(io)?;
+            Ok(v["foreign_path_tokens"].as_u64() == Some(0))
         }
         _ => Err(USAGE.to_string()),
     }
