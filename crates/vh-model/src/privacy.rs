@@ -9,6 +9,13 @@
 //! 4. URL 쿼리 파라미터 이름이 민감하면 값만 가린다.
 //! 5. `Bearer` 뒤 값을 가린다.
 //! 6. 인자 안 어디서든 sk- 키, GitHub·Slack 토큰, AWS 키 ID, JWT, URL userinfo 부분만 가린다.
+//!
+//! 계약 v1.1 보강:
+//! 1'. 민감 키 판정 확장: 조각이 credential, credentials, pass 이거나 조각에 passw가 들어 있거나,
+//!     구분자를 뺀 키 전체(소문자)가 password, passwd, token, secret, apikey, pwd 로 끝나면 민감
+//!     (키 전체가 pwd·oldpwd이면 아님).
+//! 7. 인자 안에 박힌 대입 `<민감 키>=<값>`: 값(따옴표로 감쌌으면 따옴표 포함)을 가린다.
+//! 8. JSON·사전 모양 `"<민감 키>": "<값>"`, `'<민감 키>': '<값>'`: 따옴표 안 값을 가린다.
 
 /// 수집 단계에서 이 키만 값과 함께 남긴다. 나머지 키와 값은 읽는 즉시 버린다.
 pub const ENV_ALLOWLIST: &[&str] = &[
@@ -50,7 +57,16 @@ const SENSITIVE_WORDS: &[&str] = &[
     "bearer",
     "cookie",
     "cookies",
+    "credential",
+    "credentials",
+    "pass",
 ];
+
+/// 구분자를 뺀 키 전체가 이것으로 끝나면 민감하다(규칙 1').
+const SENSITIVE_SUFFIXES: &[&str] = &["password", "passwd", "token", "secret", "apikey", "pwd"];
+
+/// 작업 폴더 변수라서 민감하지 않은 키(규칙 1' 예외).
+const NOT_SENSITIVE_KEYS: &[&str] = &["pwd", "oldpwd"];
 
 /// 표시·JSON 출력용 argv 마스킹. 원소 수는 그대로 유지한다.
 pub fn redact_argv(argv: &[String]) -> Vec<String> {
@@ -118,9 +134,36 @@ fn split_words(name: &str) -> Vec<String> {
 }
 
 fn is_sensitive_name(name: &str) -> bool {
-    split_words(name)
-        .iter()
-        .any(|w| SENSITIVE_WORDS.contains(&w.as_str()) || w.starts_with("passw"))
+    let joined: String = name
+        .chars()
+        .filter(|c| !matches!(c, '_' | '-' | '.'))
+        .collect::<String>()
+        .to_lowercase();
+    if NOT_SENSITIVE_KEYS.contains(&joined.as_str()) {
+        return false;
+    }
+    SENSITIVE_SUFFIXES.iter().any(|s| joined.ends_with(s))
+        || split_words(name)
+            .iter()
+            .any(|w| SENSITIVE_WORDS.contains(&w.as_str()) || w.contains("passw"))
+}
+
+/// 따옴표로 시작하는 값의 끝(닫는 따옴표 다음 위치). `"`는 역슬래시 이스케이프를 건너뛴다.
+/// 닫는 따옴표가 없으면 문자열 끝.
+fn quoted_end(b: &[u8], open: usize) -> usize {
+    let q = b[open];
+    let mut j = open + 1;
+    while j < b.len() {
+        if q == b'"' && b[j] == b'\\' {
+            j += 2;
+            continue;
+        }
+        if b[j] == q {
+            return j + 1;
+        }
+        j += 1;
+    }
+    b.len()
 }
 
 fn is_ident(name: &str) -> bool {
@@ -272,6 +315,49 @@ fn mask_spans(s: &str) -> String {
                 let vend = run_end(b, vstart, value_byte);
                 if not_redacted(vstart, vend) {
                     spans.push((vstart, vend));
+                }
+            }
+        }
+        // 7. 박힌 대입: 앞이 영숫자·_가 아닌 위치에서 시작하는 <민감 키>=<값>
+        let key_start = i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_');
+        if key_start && (b[i].is_ascii_alphabetic() || b[i] == b'_') {
+            let kend = run_end(b, i, |c| c.is_ascii_alphanumeric() || c == b'_');
+            if kend < n && b[kend] == b'=' && is_sensitive_name(&s[i..kend]) {
+                let v = kend + 1;
+                let vend = match b.get(v) {
+                    Some(b'\'' | b'"') => quoted_end(b, v),
+                    _ => run_end(b, v, |c| {
+                        !(c.is_ascii_whitespace() || matches!(c, b';' | b'&' | b'|' | b')'))
+                    }),
+                };
+                // 이미 가린 값(<가림>으로 시작)은 다시 가리지 않는다(멱등).
+                if v < vend && !s[v..vend].starts_with(REDACTED) {
+                    spans.push((v, vend));
+                }
+            }
+        }
+        // 8. JSON·사전 모양: "<민감 키>" : "<값>" 또는 '<민감 키>' : '<값>'
+        if b[i] == b'"' || b[i] == b'\'' {
+            let q = b[i];
+            let ks = i + 1;
+            let ke = run_end(b, ks, |c| {
+                c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-' | b'.')
+            });
+            if ke > ks && ke < n && b[ke] == q {
+                let colon = run_end(b, ke + 1, |c| c == b' ' || c == b'\t');
+                if colon < n && b[colon] == b':' {
+                    let open = run_end(b, colon + 1, |c| c == b' ' || c == b'\t');
+                    if open < n && b[open] == q && is_sensitive_name(&s[ks..ke]) {
+                        let close = quoted_end(b, open);
+                        let vend = if close > open + 1 && b[close - 1] == q {
+                            close - 1
+                        } else {
+                            close
+                        };
+                        if not_redacted(open + 1, vend) {
+                            spans.push((open + 1, vend));
+                        }
+                    }
                 }
             }
         }

@@ -246,3 +246,148 @@ fn redact_is_idempotent_and_len_preserving() {
     assert_eq!(once.len(), args.len());
     assert_eq!(r(&once), once);
 }
+
+// ---- 계약 v1.1 보강(1'·7·8). 가짜 비밀과 민감 키 대입은 런타임에 조각을 이어 만든다. ----
+
+/// 조각을 이어 붙인다(소스에 민감 키 대입 모양이 그대로 나타나지 않게).
+fn cat(parts: &[&str]) -> String {
+    parts.concat()
+}
+
+fn one(arg: String) -> String {
+    redact_argv(&[arg]).remove(0)
+}
+
+#[test]
+fn v11_embedded_single_quoted_in_shell_script() {
+    let input = cat(&["cd /x; PREVIEW_TESTER_PASS", "WORD=", "'hunter2' npm test"]);
+    let want = cat(&["cd /x; PREVIEW_TESTER_PASS", "WORD=", REDACTED, " npm test"]);
+    assert_eq!(one(input), want);
+}
+
+#[test]
+fn v11_embedded_double_quoted_with_spaces() {
+    let input = cat(&["A=1 DB_PASS", "WORD=", "\"p a ss\" cmd"]);
+    let want = cat(&["A=1 DB_PASS", "WORD=", REDACTED, " cmd"]);
+    assert_eq!(one(input), want);
+}
+
+#[test]
+fn v11_embedded_unquoted() {
+    let input = cat(&["env API_TOK", "EN=", "abc123 node x.js"]);
+    assert_eq!(
+        one(input),
+        cat(&["env API_TOK", "EN=", REDACTED, " node x.js"])
+    );
+}
+
+#[test]
+fn v11_whole_argument_assignment_keeps_rule_2() {
+    // 인자 전체가 KEY=VALUE 모양이면 규칙 2가 먼저 적용되어 = 뒤 전체를 가린다(더 많이 가리는 쪽).
+    let input = cat(&["API_TOK", "EN=", "abc123 node x.js"]);
+    assert_eq!(one(input), cat(&["API_TOK", "EN=", REDACTED]));
+}
+
+#[test]
+fn v11_embedded_after_export() {
+    let input = cat(&["export GITHUB_TOK", "EN=", "abc; run"]);
+    assert_eq!(
+        one(input),
+        cat(&["export GITHUB_TOK", "EN=", REDACTED, "; run"])
+    );
+}
+
+#[test]
+fn v11_embedded_after_semicolon_and_before_and() {
+    let input = cat(&["true;SECRET_K", "EY=", "zz&&go"]);
+    assert_eq!(one(input), cat(&["true;SECRET_K", "EY=", REDACTED, "&&go"]));
+}
+
+#[test]
+fn v11_embedded_password_flag_mid_argument() {
+    let input = cat(&["run --user demo --pass", "word=", "hunter2 --verbose"]);
+    assert_eq!(
+        one(input),
+        cat(&["run --user demo --pass", "word=", REDACTED, " --verbose"])
+    );
+}
+
+#[test]
+fn v11_embedded_escaped_double_quote() {
+    let input = cat(&["sh -c X_TOK", "EN=", "\"a\\\"b\" next"]);
+    assert_eq!(one(input), cat(&["sh -c X_TOK", "EN=", REDACTED, " next"]));
+}
+
+#[test]
+fn v11_embedded_non_sensitive_kept() {
+    let input = "A=1 PWD=/x OLDPWD=/y KEYBOARD_LAYOUT=us GIT_AUTHOR_NAME=demo cmd".to_string();
+    assert_eq!(one(input.clone()), input);
+}
+
+#[test]
+fn v11_json_double_quotes() {
+    let input = cat(&["{\"pass", "word\":\"hunter2\",\"user\":\"demo\"}"]);
+    let want = cat(&["{\"pass", "word\":\"", REDACTED, "\",\"user\":\"demo\"}"]);
+    assert_eq!(one(input), want);
+}
+
+#[test]
+fn v11_json_single_quotes_and_spaces() {
+    let input = cat(&[
+        "{'api_k",
+        "ey': 'abc', 'n': 1} {\"sessionTok",
+        "en\" : \"x\"}",
+    ]);
+    let want = cat(&[
+        "{'api_k",
+        "ey': '",
+        REDACTED,
+        "', 'n': 1} {\"sessionTok",
+        "en\" : \"",
+        REDACTED,
+        "\"}",
+    ]);
+    assert_eq!(one(input), want);
+}
+
+#[test]
+fn v11_key_judgement_sensitive() {
+    for key in [
+        "PGPASSWORD",
+        "MYSQL_PWD",
+        "DB_PASS",
+        "sessionToken",
+        "AWS_SECRET_ACCESS_KEY",
+        "GH_CREDENTIALS",
+    ] {
+        assert_eq!(one(kv(key, "x1")), masked(key), "key {key}");
+    }
+}
+
+#[test]
+fn v11_key_judgement_not_sensitive() {
+    for (key, value) in [
+        ("PWD", "/x"),
+        ("OLDPWD", "/y"),
+        ("KEYBOARD_LAYOUT", "us"),
+        ("GIT_AUTHOR_NAME", "demo"),
+    ] {
+        let arg = kv(key, value);
+        assert_eq!(one(arg.clone()), arg, "key {key}");
+    }
+}
+
+#[test]
+fn v11_redaction_is_idempotent() {
+    let args = vec![
+        cat(&["cd /x; PREVIEW_TESTER_PASS", "WORD=", "'hunter2' npm test"]),
+        cat(&["{\"pass", "word\":\"hunter2\"}"]),
+        cat(&["export GITHUB_TOK", "EN=", "abc; run"]),
+    ];
+    let once = redact_argv(&args);
+    assert_eq!(redact_argv(&once), once);
+    assert!(
+        once.iter()
+            .all(|a| !a.contains("hunter2") && !a.contains("abc;"))
+    );
+}
