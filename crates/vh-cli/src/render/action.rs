@@ -51,7 +51,7 @@ pub fn ladder(a: &PlannedAction) -> String {
 fn item_label(lk: &Lookup<'_>, a: &PlannedAction) -> String {
     let base = lk.label(a.target);
     if a.include_descendants && a.descendant_count > 0 {
-        format!("{base} 와 자식 {}개", a.descendant_count)
+        format!("{base} (자식 {}개 포함)", a.descendant_count)
     } else {
         base
     }
