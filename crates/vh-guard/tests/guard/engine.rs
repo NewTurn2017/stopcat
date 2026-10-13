@@ -717,3 +717,48 @@ fn policy_arc_is_shared_until_changed() {
     );
     assert_eq!(e.policy().scan_interval_ms, 7000);
 }
+
+#[test]
+fn notifications_distinguish_same_named_targets() {
+    let mut sc = Scene::new();
+    sc.leftover(101, Kind::Emulator, Confidence::Confirmed, OLD, Some(false));
+    sc.leftover(102, Kind::Emulator, Confidence::Confirmed, OLD, Some(false));
+    for c in &mut sc.classified {
+        c.label_ko = "MCP 서버: chrome-devtools".into();
+    }
+    sc.classified[0].project = Some("~/dev/alpha".into());
+    let (mut e, probe, clock) = engine_for(&sc, safe());
+    scan(&mut e, &clock);
+    let body = &probe.notifications()[0].1;
+    assert!(body.contains("MCP 서버: chrome-devtools (alpha)"), "{body}");
+    assert!(
+        body.contains("MCP 서버: chrome-devtools (pid 102)"),
+        "{body}"
+    );
+}
+
+#[test]
+fn young_orphan_pending_shows_in_status_without_signal() {
+    let mut sc = Scene::new();
+    let p = proc_(101, 1, UID, T0 - 9 * 60_000, "p101");
+    let r = pref(&p);
+    sc.procs.push(p);
+    sc.classified
+        .push(classified(r, Kind::McpServer, "MCP 서버: x", None));
+    let mut f = finding(
+        "orphan:101",
+        FindingKind::Orphan,
+        Confidence::Possible,
+        vec![r],
+        Suggestion::Review,
+        0,
+    );
+    f.reason_codes = vec!["young".into()];
+    sc.findings.push(f);
+    let (mut e, probe, clock) = engine_for(&sc, safe());
+    let u = scan(&mut e, &clock);
+    assert_eq!(u.status.pending.len(), 1);
+    assert_eq!(u.status.pending[0].eta_ms, Some(60_000));
+    scan(&mut e, &clock);
+    assert!(probe.log.sent().is_empty(), "표시뿐, 신호 0");
+}

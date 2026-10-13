@@ -636,3 +636,141 @@ fn decide_lean_matches_decide_without_skips() {
     }
     assert!(skipped_seen > 0, "비교한 장면에 실제로 제외 사유가 있었다");
 }
+
+const NINE_MIN_AGO: u64 = T0 - 9 * 60_000;
+
+fn young_orphan(kind: Kind, owner_alive: Option<bool>) -> (Scene, ProcRef) {
+    let mut sc = Scene::new();
+    let p = proc_(101, 1, UID, NINE_MIN_AGO, "p101");
+    let r = pref(&p);
+    sc.procs.push(p);
+    sc.classified
+        .push(classified(r, kind, &format!("{kind:?} 101"), owner_alive));
+    let mut f = finding(
+        "orphan:101",
+        FindingKind::Orphan,
+        Confidence::Possible,
+        vec![r],
+        Suggestion::Review,
+        100 * 1024 * 1024,
+    );
+    f.reason_codes = vec!["ppid_launchd".into(), "same_uid".into(), "young".into()];
+    sc.findings.push(f);
+    (sc, r)
+}
+
+#[test]
+fn young_orphan_with_confirmed_grounds_is_pending_with_eta_but_not_executed() {
+    let (sc, r) = young_orphan(Kind::McpServer, None);
+    let policy = safe();
+    let m = mem(policy.level);
+    let (s, rep) = sc.build(T0);
+    for d in [
+        decide(&m, &s, &rep, &policy, T0),
+        decide_lean(&m, &s, &rep, &policy, T0),
+    ] {
+        assert!(d.terminate.is_empty() && !d.trip_circuit);
+        assert_eq!(d.pending.len(), 1, "{:?}", d.pending);
+        let p = &d.pending[0];
+        assert_eq!((p.target, p.step), (r, Step::Term));
+        assert_eq!(p.finding_id, "orphan:101");
+        assert_eq!((p.seen_scans, p.needed_scans), (0, 2));
+        assert_eq!(p.eta_ms, Some(60_000), "10분 - 9분");
+        assert!(d.next_term_streak.is_empty(), "연속 확인은 세지 않는다");
+    }
+    let (_, ds) = run_scans(&sc, &policy, 3);
+    assert!(
+        ds.iter().all(|d| d.terminate.is_empty()),
+        "표시뿐, 실행 없음"
+    );
+}
+
+#[test]
+fn young_orphan_owner_dead_counts_as_grounds() {
+    let (sc, _) = young_orphan(Kind::McpServer, Some(false));
+    let (_, ds) = run_scans(&sc, &safe(), 1);
+    assert_eq!(ds[0].pending.len(), 1);
+}
+
+#[test]
+fn young_orphan_then_ten_minutes_follows_existing_flow() {
+    let (young, r) = young_orphan(Kind::McpServer, None);
+    let policy = safe();
+    let mut m = mem(policy.level);
+    let (s, rep) = young.build(T0);
+    let d0 = decide(&m, &s, &rep, &policy, T0);
+    apply(&mut m, &d0);
+    assert_eq!(d0.pending[0].seen_scans, 0);
+
+    let mut grown = Scene::new();
+    let p = proc_(101, 1, UID, NINE_MIN_AGO, "p101");
+    grown.procs.push(p);
+    grown
+        .classified
+        .push(classified(r, Kind::McpServer, "McpServer 101", None));
+    grown.findings.push(finding(
+        "orphan:101",
+        FindingKind::Orphan,
+        Confidence::Confirmed,
+        vec![r],
+        term(false),
+        100 * 1024 * 1024,
+    ));
+    let t1 = NINE_MIN_AGO + 10 * 60_000;
+    let (s, rep) = grown.build(t1);
+    let d1 = decide(&m, &s, &rep, &policy, t1);
+    apply(&mut m, &d1);
+    assert!(d1.terminate.is_empty());
+    assert_eq!(
+        (d1.pending[0].seen_scans, d1.pending[0].needed_scans),
+        (1, 2)
+    );
+    let (s, rep) = grown.build(t1 + 5000);
+    let d2 = decide(&m, &s, &rep, &policy, t1 + 5000);
+    assert_eq!(d2.terminate.len(), 1);
+    assert_eq!(d2.terminate[0].target, r);
+}
+
+#[test]
+fn young_orphan_without_confirmed_grounds_has_no_pending() {
+    let cases: Vec<(&str, Kind, Option<bool>, GuardPolicy)> = vec![
+        ("주인 생존", Kind::McpServer, Some(true), safe()),
+        ("보호 Kind", Kind::AgentCli, None, aggressive()),
+        ("알림만 Kind", Kind::Emulator, None, safe()),
+        (
+            "근거 없음(stdio 아님·주인 모름)",
+            Kind::DevServer,
+            None,
+            safe(),
+        ),
+        ("알림만 수준", Kind::McpServer, None, notify_only()),
+    ];
+    for (why, kind, owner, policy) in cases {
+        let (sc, _) = young_orphan(kind, owner);
+        let (_, ds) = run_scans(&sc, &policy, 2);
+        assert!(
+            ds.iter()
+                .all(|d| d.pending.is_empty() && d.terminate.is_empty()),
+            "{why}: {:?}",
+            ds[0].pending
+        );
+    }
+
+    let (mut sc, _) = young_orphan(Kind::McpServer, None);
+    sc.procs[1].has_tty = true;
+    let (_, ds) = run_scans(&sc, &safe(), 1);
+    assert!(ds[0].pending.is_empty(), "터미널 → Likely라 Safe 기준 미달");
+
+    let (mut sc, _) = young_orphan(Kind::McpServer, None);
+    sc.findings[0].reason_codes.retain(|c| c != "young");
+    let (_, ds) = run_scans(&sc, &safe(), 1);
+    assert!(
+        ds[0].pending.is_empty(),
+        "young 근거 없으면 표시하지 않는다"
+    );
+
+    let (mut sc, _) = young_orphan(Kind::McpServer, None);
+    sc.procs[1].start_time_unix_ms = OLD;
+    let (_, ds) = run_scans(&sc, &safe(), 1);
+    assert!(ds[0].pending.is_empty(), "나이는 찼는데 Review면 다른 이유");
+}

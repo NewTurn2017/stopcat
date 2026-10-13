@@ -115,3 +115,35 @@ fn queue_capped_and_overflow_counted_exactly() {
     let (body, _) = b.flush(1, &mut send).unwrap();
     assert_eq!(body, "새 줄", "보낸 뒤에는 넘친 수도 0부터");
 }
+
+#[test]
+fn notify_name_adds_project_or_pid_and_caps_length() {
+    use vh_guard::notify::{MAX_NOTIFY_NAME_CHARS, notify_name};
+    assert_eq!(
+        notify_name(
+            "MCP 서버: chrome-devtools",
+            Some("~/dev/tools/vibe-health"),
+            101
+        ),
+        "MCP 서버: chrome-devtools (vibe-health)"
+    );
+    assert_eq!(
+        notify_name("MCP 서버: chrome-devtools", Some("~/dev/app/"), 101),
+        "MCP 서버: chrome-devtools (app)"
+    );
+    assert_eq!(
+        notify_name("MCP 서버: chrome-devtools", None, 202),
+        "MCP 서버: chrome-devtools (pid 202)"
+    );
+    let long = notify_name(
+        &"가".repeat(200),
+        Some(&format!("/x/{}", "나".repeat(50))),
+        1,
+    );
+    assert_eq!(long.chars().count(), MAX_NOTIFY_NAME_CHARS);
+    assert!(long.ends_with("…)"), "{long}");
+    assert!(long.contains("(나"), "구분 정보는 남는다: {long}");
+    let long = notify_name(&"가".repeat(200), None, 42);
+    assert!(long.chars().count() <= MAX_NOTIFY_NAME_CHARS);
+    assert!(long.ends_with("… (pid 42)"), "{long}");
+}
