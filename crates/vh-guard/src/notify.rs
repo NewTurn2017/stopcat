@@ -75,6 +75,35 @@ impl Drop for OsascriptNotifier {
     }
 }
 
+/// 알림 줄의 대상 이름(구분 정보 포함) 상한(글자). 넘으면 이름 쪽을 줄이고 구분 정보는 남긴다.
+pub const MAX_NOTIFY_NAME_CHARS: usize = 60;
+/// 구분 정보 상한(글자).
+pub const MAX_NOTIFY_TAG_CHARS: usize = 24;
+
+/// 알림 줄의 대상 이름: `이름 (프로젝트 폴더 이름)`, 프로젝트가 없으면 `이름 (pid N)`.
+/// 같은 이름이 여러 개여도 무엇에 대한 알림인지 구분되게 한다.
+pub fn notify_name(label_ko: &str, project: Option<&str>, pid: i32) -> String {
+    let last = project
+        .map(|p| p.trim_end_matches('/'))
+        .and_then(|p| p.rsplit('/').next())
+        .filter(|s| !s.is_empty());
+    let tag = match last {
+        Some(name) => clip(name, MAX_NOTIFY_TAG_CHARS),
+        None => format!("pid {pid}"),
+    };
+    let room = MAX_NOTIFY_NAME_CHARS.saturating_sub(tag.chars().count() + 3);
+    format!("{} ({tag})", clip(label_ko, room))
+}
+
+fn clip(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
 /// 큐에 두는 서로 다른 줄의 상한. 넘친 줄은 버리고 수만 세어 본문 끝 '외 N건'에 넣는다.
 pub const MAX_QUEUED_LINES: usize = 100;
 

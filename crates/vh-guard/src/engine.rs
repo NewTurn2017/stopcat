@@ -14,7 +14,7 @@ use crate::cpu::{fill_cpu_pct, remember};
 use crate::decide::{Candidate, NotifyItem, SkipReason, decide_lean};
 use crate::handle::{GuardCommand, GuardUpdate, ManualRunResult, ShutdownReport};
 use crate::memory::{Demoted, GuardMemory};
-use crate::notify::NotifyBatcher;
+use crate::notify::{NotifyBatcher, notify_name};
 use crate::snap::bare_snapshot;
 
 /// 한 번의 자동 실행(execute)이 쓸 수 있는 총 시간.
@@ -204,7 +204,8 @@ impl<B: GuardBackend> Engine<B> {
         }
         for n in &d.notify {
             if self.mem.notified.insert((n.target, n.reason)) {
-                self.batcher.push(notify_line(n));
+                let name = notify_name_for(&report, n.target, &n.label_ko);
+                self.batcher.push(notify_line(n, &name));
             }
         }
         let alive: HashSet<ProcRef> = snapshot
@@ -437,7 +438,8 @@ impl<B: GuardBackend> Engine<B> {
                 .find(|c| c.target == o.action.target)
                 .map(|c| c.label_ko.clone())
                 .unwrap_or_else(|| o.action.reason_ko.clone());
-            self.record_termination(&o, &label, &run_id, events);
+            let name = notify_name_for(report, o.action.target, &label);
+            self.record_termination(&o, &label, &name, &run_id, events);
         }
     }
 
@@ -445,6 +447,7 @@ impl<B: GuardBackend> Engine<B> {
         &mut self,
         o: &ActionOutcome,
         label: &str,
+        name: &str,
         run_id: &str,
         events: &mut Vec<GuardEvent>,
     ) {
@@ -462,7 +465,7 @@ impl<B: GuardBackend> Engine<B> {
                     o.action.est_reclaim_bytes,
                 ));
                 self.batcher.push(format!(
-                    "{label} 종료({} 회수)",
+                    "{name} 종료({} 회수)",
                     fmt_bytes(o.action.est_reclaim_bytes)
                 ));
             }
@@ -558,7 +561,8 @@ impl<B: GuardBackend> Engine<B> {
                     &label,
                     &o.note_ko,
                 ));
-                self.batcher.push(format!("{label} 우선순위 낮춤"));
+                let name = notify_name_for(report, t, &label);
+                self.batcher.push(format!("{name} 우선순위 낮춤"));
             } else {
                 self.mem.refused.insert(t);
                 let kind = if o.final_state == FinalState::Refused {
@@ -851,28 +855,37 @@ fn label_of(cands: &[Candidate], t: ProcRef) -> String {
         .unwrap_or_else(|| format!("pid {}", t.pid))
 }
 
-fn notify_line(n: &NotifyItem) -> String {
+fn notify_name_for(report: &Report, t: ProcRef, label: &str) -> String {
+    let project = report
+        .classified
+        .iter()
+        .find(|c| c.target == t)
+        .and_then(|c| c.project.as_deref());
+    notify_name(label, project, t.pid)
+}
+
+fn notify_line(n: &NotifyItem, name: &str) -> String {
     match n.reason {
         SkipReason::KindNotifyOnly => format!(
             "{}: 정리 후보지만 자동으로 끄지 않아요(알림만, {})",
-            n.label_ko,
+            name,
             fmt_bytes(n.reclaim_bytes)
         ),
         SkipReason::LevelNotifyOnly => format!(
             "{}: 정리 후보({}). 화면에서 고르면 정리해요",
-            n.label_ko,
+            name,
             fmt_bytes(n.reclaim_bytes)
         ),
         SkipReason::CircuitOpen => {
-            format!("{}: 차단기가 열려 있어 끄지 않았어요", n.label_ko)
+            format!("{}: 차단기가 열려 있어 끄지 않았어요", name)
         }
         SkipReason::QuotaExceeded => {
-            format!("{}: 한꺼번에 너무 많아 끄지 않았어요", n.label_ko)
+            format!("{}: 한꺼번에 너무 많아 끄지 않았어요", name)
         }
         SkipReason::RunawayNoDemote => {
-            format!("{}: CPU 폭주(우선순위는 낮추지 않아요)", n.label_ko)
+            format!("{}: CPU 폭주(우선순위는 낮추지 않아요)", name)
         }
-        _ => format!("{}: 자동 조치하지 않았어요", n.label_ko),
+        _ => format!("{}: 자동 조치하지 않았어요", name),
     }
 }
 

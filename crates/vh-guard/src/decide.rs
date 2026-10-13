@@ -6,8 +6,8 @@
 use std::collections::{HashMap, HashSet};
 
 use vh_model::{
-    Classified, Confidence, ExeOrigin, FindingKind, GuardPolicy, Kind, PendingAction, Proc,
-    ProcRef, ProcStatus, Report, Snapshot, Step, Suggestion, exe_origin,
+    Classified, Confidence, ExeOrigin, Finding, FindingKind, GuardPolicy, Kind, PendingAction,
+    Proc, ProcRef, ProcStatus, Report, Snapshot, Step, Suggestion, exe_origin,
 };
 
 use crate::cpu::next_scan_interval_ms;
@@ -252,8 +252,14 @@ fn decide_terminations(
             include_descendants,
         } = f.suggestion
         else {
-            for t in &f.targets {
-                skip(*t, &f.id, SkipReason::SuggestionNotTerminate);
+            for &t in &f.targets {
+                match young_orphan_pending(prev, f, t, idx, policy, now_ms) {
+                    Some(p) => {
+                        skip(t, &f.id, SkipReason::TooYoung);
+                        d.pending.push(p);
+                    }
+                    None => skip(t, &f.id, SkipReason::SuggestionNotTerminate),
+                }
             }
             continue;
         };
@@ -378,6 +384,71 @@ fn decide_terminations(
         }
     }
     let _ = snapshot;
+}
+
+/// 나이만 모자라 아직 Terminate 제안이 아닌 고아를 화면의 '자동 예정'으로만 보여 준다(실행 없음).
+/// vh-analyze는 나이 미달 고아에 `young`만 남기고 다른 근거를 적지 않으므로, 나이가 차면 Confirmed가 될
+/// 근거(stdio 종류 또는 주인 종료)와 강등 요인(터미널·실행 파일 미상)을 분류 결과와 스냅샷에서 다시 본다.
+fn young_orphan_pending(
+    prev: &GuardMemory,
+    f: &Finding,
+    t: ProcRef,
+    idx: &Index<'_>,
+    policy: &GuardPolicy,
+    now_ms: u64,
+) -> Option<PendingAction> {
+    if !matches!(f.kind, FindingKind::Orphan | FindingKind::LogicalOrphan)
+        || !f.reason_codes.iter().any(|r| r == "young")
+    {
+        return None;
+    }
+    let p = idx
+        .procs
+        .get(&t)
+        .filter(|p| p.status != ProcStatus::Zombie)?;
+    let age = now_ms.saturating_sub(p.start_time_unix_ms);
+    if age >= policy.min_process_age_ms
+        || idx.self_and_ancestors.contains(&t.pid)
+        || prev.refused.contains(&t)
+    {
+        return None;
+    }
+    let c = idx.cls.get(&t)?;
+    let kind = c.kind;
+    if PROTECTED_KINDS.contains(&kind)
+        || policy.notify_only_kinds.contains(&kind)
+        || !policy.auto_terminate_kinds.contains(&kind)
+        || c.owner_alive == Some(true)
+    {
+        return None;
+    }
+    let sig = c.signature_id.as_deref().unwrap_or("");
+    let stdio = matches!(kind, Kind::McpServer | Kind::LanguageServer)
+        || matches!(sig, "w_esbuild_service" | "agent_claude_bg");
+    let owner_dead = c.owner_alive == Some(false);
+    if sig == "agent_claude_daemon" || !(stdio || owner_dead) {
+        return None;
+    }
+    let mut would_be = Confidence::Confirmed;
+    if p.has_tty {
+        would_be = Confidence::Likely;
+    }
+    if exe_origin(p.exe.as_deref()) == ExeOrigin::Unknown {
+        would_be = Confidence::Possible;
+    }
+    if !would_be.meets(policy.min_confidence) {
+        return None;
+    }
+    Some(PendingAction {
+        target: t,
+        finding_id: f.id.clone(),
+        kind,
+        label_ko: idx.label(t),
+        step: Step::Term,
+        seen_scans: 0,
+        needed_scans: policy.persistence_scans,
+        eta_ms: Some(policy.min_process_age_ms - age),
+    })
 }
 
 fn apply_quota(

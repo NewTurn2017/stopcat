@@ -38,7 +38,9 @@ pub use handle::{
 pub use lock::AllowListSignaler;
 pub use mailbox::{UpdateReceiver, UpdateSender, mailbox};
 pub use memory::{CpuStreak, Demoted, GuardMemory, Streak};
-pub use notify::{Notifier, NotifyBatcher, NullNotifier, OsascriptNotifier, osascript_argv};
+pub use notify::{
+    Notifier, NotifyBatcher, NullNotifier, OsascriptNotifier, notify_name, osascript_argv,
+};
 
 /// 환경 변수 이름.
 pub mod env {
