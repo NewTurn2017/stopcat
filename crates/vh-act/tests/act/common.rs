@@ -194,6 +194,7 @@ pub struct GuardedSignaler {
     pub sent: RefCell<Vec<(i32, i32)>>,
     pub demoted: RefCell<Vec<i32>>,
     pub violations: RefCell<Vec<i32>>,
+    pub undemoted: RefCell<Vec<i32>>,
 }
 
 impl GuardedSignaler {
@@ -227,6 +228,14 @@ impl Signaler for GuardedSignaler {
             return Err(libc::EPERM);
         }
         RealSignaler.demote(pid)
+    }
+
+    fn undemote(&self, pid: i32) -> Result<(), i32> {
+        self.undemoted.borrow_mut().push(pid);
+        if !self.permit(pid) {
+            return Err(libc::EPERM);
+        }
+        RealSignaler.undemote(pid)
     }
 }
 

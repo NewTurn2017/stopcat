@@ -1,5 +1,6 @@
 //! 수집·분석·계획·실행·알림·시계를 바꿔 끼우는 trait과 진짜 구현.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use vh_act::{ExecEnv, Policy, PriorityTarget, RealProber, RealSignaler, Selection, Signaler};
@@ -33,6 +34,7 @@ pub struct RealGuardBackend {
     state_dir: PathBuf,
     signaler: Box<dyn Signaler + Send>,
     notifier: Box<dyn Notifier>,
+    locked: Option<BTreeSet<i32>>,
 }
 
 impl std::fmt::Debug for RealGuardBackend {
@@ -47,19 +49,21 @@ impl RealGuardBackend {
     /// 환경을 보고 만든다: `VH_E2E_ALLOW_PIDS`가 있으면(비어 있어도) 잠금 signaler로 감싸고,
     /// `VH_NOTIFY=off`면 알림을 보내지 않는다. 상태 폴더는 `vh_act::state_dir()`(없으면 0700으로 만든다).
     pub fn new() -> std::io::Result<Self> {
-        let signaler: Box<dyn Signaler + Send> = match std::env::var(env::E2E_ALLOW_PIDS) {
-            Ok(raw) => Box::new(AllowListSignaler::from_env_value(
-                Box::new(RealSignaler),
-                &raw,
-            )),
-            Err(_) => Box::new(RealSignaler),
-        };
+        let allow = std::env::var(env::E2E_ALLOW_PIDS).ok();
+        let (signaler, locked) = signaler_from_env(allow.as_deref());
         let notifier: Box<dyn Notifier> = if notify_disabled_by_env() {
             Box::new(NullNotifier)
         } else {
             Box::new(OsascriptNotifier::default())
         };
-        Self::with(signaler, notifier)
+        let mut be = Self::with(signaler, notifier)?;
+        be.locked = locked;
+        Ok(be)
+    }
+
+    /// `VH_E2E_ALLOW_PIDS`로 잠겼으면 허용 목록(빈 목록 = 전부 거부). 잠기지 않았으면 None.
+    pub fn locked_pids(&self) -> Option<&BTreeSet<i32>> {
+        self.locked.as_ref()
     }
 
     /// signaler·notifier 주입. 상태 폴더는 `vh_act::state_dir()`.
@@ -83,20 +87,38 @@ impl RealGuardBackend {
             state_dir,
             signaler,
             notifier,
+            locked: None,
         }
     }
 }
 
+/// `VH_E2E_ALLOW_PIDS` 값이 있으면(비어 있어도) 진짜 signaler를 잠금으로 감싼다. 없으면 진짜 signaler 그대로.
+/// 돌려주는 두 번째 값은 잠금 목록(없으면 None).
+pub fn signaler_from_env(
+    allow_pids: Option<&str>,
+) -> (Box<dyn Signaler + Send>, Option<BTreeSet<i32>>) {
+    match allow_pids {
+        Some(raw) => {
+            let lock = AllowListSignaler::from_env_value(Box::new(RealSignaler), raw);
+            let allowed = lock.allowed().clone();
+            (Box::new(lock), Some(allowed))
+        }
+        None => (Box::new(RealSignaler), None),
+    }
+}
+
 /// `VH_NOTIFY=off|0|false|no`(대소문자 무시).
+pub fn notify_disabled(value: Option<&str>) -> bool {
+    value.is_some_and(|v| {
+        matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "off" | "0" | "false" | "no"
+        )
+    })
+}
+
 pub fn notify_disabled_by_env() -> bool {
-    std::env::var(env::NOTIFY)
-        .map(|v| {
-            matches!(
-                v.trim().to_ascii_lowercase().as_str(),
-                "off" | "0" | "false" | "no"
-            )
-        })
-        .unwrap_or(false)
+    notify_disabled(std::env::var(env::NOTIFY).ok().as_deref())
 }
 
 impl GuardBackend for RealGuardBackend {

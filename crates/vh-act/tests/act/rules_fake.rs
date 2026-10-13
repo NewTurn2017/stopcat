@@ -775,3 +775,151 @@ fn fake_audit_log_lines_parse_and_follow_order() {
     assert!(r.audit.iter().all(|e| e.run_id == "t"));
     assert_eq!(r.audit[0].reason_ko.split(':').next(), Some(R04_OTHER_UID));
 }
+
+fn priority_plan(fx: &Fx, targets: &[(ProcRef, Step)], max_actions: usize) -> ActionPlan {
+    let pt: Vec<PriorityTarget> = targets
+        .iter()
+        .map(|(t, step)| PriorityTarget {
+            target: *t,
+            step: *step,
+            reason_ko: "지킴이".into(),
+        })
+        .collect();
+    let policy = Policy {
+        max_actions,
+        ..Policy::default()
+    };
+    plan_priority(&fx.snap, Some(&fx.rep), &pt, &policy)
+}
+
+#[test]
+fn w2_plan_priority_demote_needs_snapshot_and_respects_rules() {
+    let p = user(7000, 1, 5_000);
+    let t = pref(7000, 5_000);
+    let fx = Fx::new(vec![p]);
+    let plan = priority_plan(&fx, &[(t, Step::Demote)], 10);
+    assert_eq!(plan.items.len(), 1, "{:?}", plan.refused);
+    assert_eq!(plan.items[0].finding_id, "demote:7000:5000");
+    assert_eq!(plan.items[0].steps, vec![Step::Demote]);
+    assert_eq!(plan.items[0].est_reclaim_bytes, 0);
+    assert!(!plan.items[0].include_descendants);
+
+    let missing = priority_plan(&fx, &[(pref(7000, 5_001), Step::Demote)], 10);
+    assert_eq!(
+        refused_rule(&missing, pref(7000, 5_001)).as_deref(),
+        Some(R14_START_TIME_MISMATCH)
+    );
+
+    let me = priority_plan(&fx, &[(pref(SELF_PID, 5_000), Step::Undemote)], 10);
+    assert_eq!(
+        refused_rule(&me, pref(SELF_PID, 5_000)).as_deref(),
+        Some(R02_SELF)
+    );
+
+    let bad = priority_plan(
+        &fx,
+        &[(t, Step::Term), (t, Step::Kill), (t, Step::Cont)],
+        10,
+    );
+    assert!(bad.items.is_empty());
+    assert!(bad.refused.iter().all(|r| r.rule == R17_PRIORITY_STEP_ONLY));
+
+    let mut fx2 = Fx::new(vec![user(7000, 1, 5_000)]);
+    fx2.rep = report(vec![classified(t, Kind::AgentCli)], Vec::new());
+    let prot = priority_plan(&fx2, &[(t, Step::Demote)], 10);
+    assert_eq!(refused_rule(&prot, t).as_deref(), Some(R08_KIND_PROTECTED));
+
+    let many: Vec<Proc> = (7001..=7004).map(|pid| user(pid, 1, 5_000)).collect();
+    let fx3 = Fx::new(many);
+    let targets: Vec<(ProcRef, Step)> = (7001..=7004)
+        .map(|pid| (pref(pid, 5_000), Step::Demote))
+        .collect();
+    let capped = priority_plan(&fx3, &targets, 2);
+    assert_eq!(capped.items.len(), 2);
+    assert_eq!(
+        capped
+            .refused
+            .iter()
+            .filter(|r| r.rule == R16_MAX_ACTIONS)
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn w2_plan_priority_undemote_without_snapshot_entry_is_planned_and_live_checked() {
+    let fx = Fx::new(vec![user(7000, 1, 5_000)]);
+    let gone = pref(7100, 9_000);
+    let plan = priority_plan(&fx, &[(gone, Step::Undemote)], 10);
+    assert_eq!(plan.items.len(), 1, "{:?}", plan.refused);
+    assert_eq!(plan.items[0].finding_id, "undemote:7100:9000");
+    let run = run_fake(&fx, &plan, world_from(&fx.snap), Vec::new());
+    assert_eq!(run.outcomes[0].final_state, FinalState::Vanished);
+    assert_eq!(run.sig.calls(), 0, "없는 프로세스에는 신호 0");
+}
+
+#[test]
+fn w2_exec_undemote_fake_ok_reused_and_eperm() {
+    let p = user(7000, 1, 5_000);
+    let t = pref(7000, 5_000);
+    let fx = Fx::new(vec![p]);
+    let mut world = world_from(&fx.snap);
+    world.bg.insert(7000, libc::PRIO_DARWIN_BG);
+    let plan = priority_plan(&fx, &[(t, Step::Undemote)], 10);
+    let run = run_fake(&fx, &plan, world, Vec::new());
+    let o = &run.outcomes[0];
+    assert_eq!(o.final_state, FinalState::StillAlive);
+    assert_eq!(o.steps.len(), 1);
+    assert_eq!(
+        (o.steps[0].step, o.steps[0].ok, o.steps[0].errno),
+        (Step::Undemote, true, None)
+    );
+    assert!(o.note_ko.contains("되돌렸"));
+    assert_eq!(*run.sig.undemoted.borrow(), vec![7000]);
+    assert!(run.sig.sent.borrow().is_empty());
+    assert!(
+        run.audit
+            .iter()
+            .any(|a| a.event == AuditEvent::Undemote && a.ok && a.subject_pid == 7000)
+    );
+
+    let mut reused = world_from(&fx.snap);
+    reused.procs.get_mut(&7000).unwrap().start_time_unix_ms = 6_000;
+    let run = run_fake(&fx, &plan, reused, Vec::new());
+    assert_eq!(run.outcomes[0].final_state, FinalState::Reused);
+    assert_eq!(run.sig.calls(), 0);
+
+    let world = world_from(&fx.snap).shared();
+    let prober = FakeProber::with_world(world.clone(), SELF_PID, SELF_UID);
+    let sig = FakeSignaler {
+        world: Some(world),
+        fail_with: Some(libc::EPERM),
+        ..FakeSignaler::default()
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let env = ExecEnv {
+        signaler: &sig,
+        prober: &prober,
+        state_dir: dir.path().to_path_buf(),
+        snapshot: &fx.snap,
+        run_id: "t".into(),
+    };
+    let out = execute(&plan, &env);
+    assert_eq!(out[0].final_state, FinalState::StillAlive);
+    assert_eq!(out[0].steps[0].errno, Some(libc::EPERM));
+    assert!(out[0].note_ko.contains("실패"));
+}
+
+#[test]
+fn w2_default_signaler_undemote_is_refused() {
+    struct Legacy;
+    impl Signaler for Legacy {
+        fn send(&self, _: i32, _: i32) -> Result<(), i32> {
+            Ok(())
+        }
+        fn demote(&self, _: i32) -> Result<(), i32> {
+            Ok(())
+        }
+    }
+    assert_eq!(Legacy.undemote(4242), Err(libc::EPERM));
+}

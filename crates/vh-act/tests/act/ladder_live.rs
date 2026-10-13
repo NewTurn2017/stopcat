@@ -300,3 +300,61 @@ fn act7_10_audit_and_revive_only_in_state_dir_with_0600() {
             .all(|e| e.target == c.r && e.run_id == "live")
     );
 }
+
+#[test]
+fn act7_11_w2_busy_child_demote_then_undemote_restores_priority() {
+    let c = OwnedChild::spawn(&["/bin/sh", "-c", "while :; do :; done"]);
+    let p0 = task_priority(c.pid()).expect("자식 task 우선순위");
+    let snap = self_snapshot(vec![c.proc_of(c.r, c.argv.clone())]);
+    let policy = Policy::default();
+    let demote = plan_priority(
+        &snap,
+        None,
+        &[PriorityTarget {
+            target: c.r,
+            step: Step::Demote,
+            reason_ko: "테스트".into(),
+        }],
+        &policy,
+    );
+    assert_eq!(demote.items.len(), 1, "{:?}", demote.refused);
+    let sig = GuardedSignaler::allowing(c.all_pids());
+    let run = exec_live(&snap, &demote, &sig);
+    assert_eq!(
+        steps_of(&run.outcomes[0]),
+        vec![(Step::Demote, c.pid(), true)]
+    );
+    let p_bg = task_priority(c.pid()).unwrap();
+    assert!(p_bg < p0, "demote: {p0} → {p_bg}");
+
+    let undemote = plan_priority(
+        &snap,
+        None,
+        &[PriorityTarget {
+            target: c.r,
+            step: Step::Undemote,
+            reason_ko: "테스트".into(),
+        }],
+        &policy,
+    );
+    let run2 = exec_live(&snap, &undemote, &sig);
+    assert_eq!(
+        steps_of(&run2.outcomes[0]),
+        vec![(Step::Undemote, c.pid(), true)]
+    );
+    assert_eq!(run2.outcomes[0].final_state, FinalState::StillAlive);
+    let p_back = task_priority(c.pid()).unwrap();
+    assert_eq!(p_back, p0, "undemote 뒤 원래 값");
+    eprintln!(
+        "act7_11 live: pid {} pti_priority {p0} → {p_bg} → {p_back}",
+        c.pid()
+    );
+    assert_eq!(*sig.undemoted.borrow(), vec![c.pid()]);
+    assert!(
+        run2.audit
+            .iter()
+            .any(|a| a.event == AuditEvent::Undemote && a.ok)
+    );
+    assert!(!is_gone(c.r), "자식은 살아 있고 Drop이 회수한다");
+    drop(run);
+}
