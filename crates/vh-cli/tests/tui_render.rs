@@ -165,7 +165,7 @@ fn first_run_screen_exact() {
 
 #[test]
 fn too_small_window() {
-    for (w, h) in [(79, 24), (80, 23), (64, 18)] {
+    for (w, h) in [(79, 24), (80, 23), (64, 18), (60, 20)] {
         let mut m = main_model();
         let l = render(&mut m, w, h);
         check_widths(&l, w as usize);
