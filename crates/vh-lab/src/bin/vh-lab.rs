@@ -11,6 +11,7 @@ const USAGE: &str = "사용법: vh-lab <명령> [옵션]
   interval-ab --vh <복사본> --vh-sha256 <값> --minutes 15 --intervals 5000,30000 --out <폴더>
   stress --max-procs <≤300> --storm-secs <≤60> --out <폴더>
   edge --vh <복사본> --vh-sha256 <값> --out <폴더>
+  termios-check --out <폴더> [--vh <복사본> --vh-sha256 <값>]
   findings --run-dir <폴더> --out <파일> --repo <작업트리> --lab-build-sha <sha> --vh-sha256 <값> [--isolation <파일>]
   privacy-check --dir <폴더> --out <파일> [--allow <접두사>]...";
 
@@ -44,6 +45,7 @@ fn supervised(cmd: &str) -> bool {
             | "interval-ab"
             | "stress"
             | "edge"
+            | "termios-check"
     )
 }
 
@@ -152,6 +154,18 @@ fn run(args: &[String]) -> Result<bool, String> {
             &need(rest, "--out")?,
         )
         .map_err(io),
+        "termios-check" => {
+            let vh = match (opt(rest, "--vh"), opt(rest, "--vh-sha256")) {
+                (Some(a), Some(b)) => Some((PathBuf::from(a), b)),
+                (None, None) => None,
+                _ => return Err("--vh와 --vh-sha256는 함께 필요".into()),
+            };
+            vh_lab::ttycheck::run(
+                &need(rest, "--out")?,
+                vh.as_ref().map(|(a, b)| (a.as_path(), b.as_str())),
+            )
+            .map_err(io)
+        }
         "findings" => {
             let iso = opt(rest, "--isolation").map(PathBuf::from);
             let lab_sha = opt(rest, "--lab-build-sha").ok_or("--lab-build-sha 필요")?;
@@ -189,6 +203,7 @@ fn run(args: &[String]) -> Result<bool, String> {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let code = match args.first().map(String::as_str) {
+        Some(vh_lab::pty::SHIM_CMD) => vh_lab::pty::shim_main(&args[1..]),
         Some("__supervise") => match run(&args[1..]) {
             Ok(true) => 0,
             Ok(false) => 2,

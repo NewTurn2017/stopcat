@@ -28,6 +28,8 @@ pub struct FindingLite {
     pub suggestion: Suggestion,
     pub targets: Vec<ProcRef>,
     pub short_ko: String,
+    #[serde(default)]
+    pub reason_codes: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -95,6 +97,7 @@ impl ScanRec {
                     suggestion: f.suggestion.clone(),
                     targets: f.targets.clone(),
                     short_ko: f.short_ko.clone(),
+                    reason_codes: f.reason_codes.clone(),
                 })
                 .collect(),
             classified: u

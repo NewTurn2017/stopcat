@@ -274,45 +274,87 @@ fn drive(lab: &mut Lab, vh: &Path, out: &Path) -> io::Result<Vec<Item>> {
     Ok(items)
 }
 
+/// 관찰이 비었거나 판정에 필요한 값을 못 얻었으면 FAIL이 아니라 INCONCLUSIVE(도구 쪽 공백).
+pub fn inconclusive_if(mut item: Item, missing: bool) -> Item {
+    let empty = item.observed.as_object().is_some_and(|o| o.is_empty());
+    if (missing || empty) && item.verdict == Verdict::Fail {
+        item.verdict = Verdict::Inconclusive;
+        item.suspected_owner = "LAB".into();
+        item.severity = "low".into();
+    }
+    item
+}
+
+pub const TOO_SMALL_KO: &str = "창을 조금 키워 주세요";
+
+/// 마지막이 80×24가 아니어야 끝의 80×24가 실제 크기 변화가 된다(PM 4단계 추가 절).
+pub const RESIZE_ORDER: [(u16, u16); 3] = [(120, 40), (60, 20), (80, 24)];
+pub const RESIZES: usize = 20;
+
 fn ui_checks(vh: &Path, out: &Path) -> io::Result<Vec<Item>> {
+    let controls = crate::ttycheck::controls(&out.join("termios-controls"))?;
     let state = out.join("ui-state");
     write_config(&state, None)?;
     let mut p = PtyVh::spawn(vh, &state, 60, 20)?;
-    std::thread::sleep(Duration::from_secs(3));
-    let small = p.contains("창을 조금 키워 주세요", 0);
+    let small_after = p.wait_for(TOO_SMALL_KO, Duration::from_secs(10));
+    let small_bytes = p.mark();
+    let small_rows = p.nonblank_rows();
     let alive_small = p.alive();
-    let sizes = [(80u16, 24u16), (120, 40), (60, 20)];
-    for i in 0..19 {
-        let (c, r) = sizes[i % 3];
-        p.resize(c, r);
+    let mut last = (60u16, 20u16);
+    for i in 0..RESIZES {
+        last = RESIZE_ORDER[i % RESIZE_ORDER.len()];
+        p.resize(last.0, last.1);
         std::thread::sleep(Duration::from_millis(500));
     }
     let mark = p.mark();
+    let final_changes_size = last != (80, 24);
     p.resize(80, 24);
-    std::thread::sleep(Duration::from_secs(3));
+    let redraw_after = p.wait_for("지킴이", Duration::from_secs(10));
+    let redraw_bytes = p.bytes_since(mark);
     let alive_after = p.alive();
-    let redrawn = p.contains("지킴이", mark);
     let exit = p.quit(Duration::from_secs(10));
     let restored = p.termios_restored();
+    let rep = p.report();
+    let e6 = it(
+        "E6",
+        "60×20 창: '창을 조금 키워 주세요', 크래시 없음",
+        &[
+            ("small_window_message", small_after.is_some()),
+            ("alive", alive_small),
+        ],
+        json!({
+            "screen_bytes": small_bytes,
+            "screen_nonblank_rows": small_rows,
+            "message_seen_after_ms": small_after.map(|d| d.as_millis() as u64),
+            "how_ko": "화면 격자(screen.rs)에서 찾음. 화면 내용은 저장하지 않음",
+        }),
+        "TUI",
+    );
+    let e7 = it(
+        "E7",
+        "창 크기 20번 바꾸기(10초, 마지막은 80×24가 아님) 뒤 생존, 80×24로 바꾸면 다시 그림, q로 exit 0, 터미널 모드 복구",
+        &[
+            ("alive_after_resizes", alive_after),
+            ("final_resize_changes_size", final_changes_size),
+            (
+                "redrawn_at_80x24",
+                redraw_after.is_some() && redraw_bytes > 0,
+            ),
+            ("exit_0", exit.is_some_and(|e| e.success())),
+            ("termios_restored", restored == Some(true)),
+        ],
+        json!({
+            "exit_code": exit.and_then(|e| e.code()),
+            "redraw_bytes": redraw_bytes,
+            "redraw_seen_after_ms": redraw_after.map(|d| d.as_millis() as u64),
+            "termios_restored": restored,
+            "termios_controls": controls.json,
+            "shim_report": rep,
+        }),
+        "TUI",
+    );
     Ok(vec![
-        it(
-            "E6",
-            "60×20 창: '창을 조금 키워 주세요', 크래시 없음",
-            &[("small_window_message", small), ("alive", alive_small)],
-            json!({}),
-            "TUI",
-        ),
-        it(
-            "E7",
-            "창 크기 20번 바꾸기(10초) 뒤 생존, 80×24에서 다시 그림, q로 exit 0, 터미널 모드 복구",
-            &[
-                ("alive_after_resizes", alive_after),
-                ("redrawn_at_80x24", redrawn),
-                ("exit_0", exit.is_some_and(|e| e.success())),
-                ("termios_restored", restored),
-            ],
-            json!({"exit_code": exit.and_then(|e| e.code())}),
-            "TUI",
-        ),
+        inconclusive_if(e6, small_bytes == 0),
+        inconclusive_if(e7, restored.is_none() || !controls.ok),
     ])
 }

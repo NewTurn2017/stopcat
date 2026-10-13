@@ -120,6 +120,7 @@ fn terminated_at(age_ms: u64) -> Records {
         }],
         audit: vec![serde_json::json!({"target": {"pid": 10}})],
         undemoted: vec![],
+        markers: Default::default(),
     }
 }
 
@@ -150,6 +151,7 @@ fn missing_termination_blames_by_finding() {
         },
         targets: vec![t],
         short_ko: String::new(),
+        reason_codes: vec!["owner_dead".into()],
     });
     let it = verdict::auto_terminated("S1", &rec, t, None);
     assert_eq!(
@@ -259,4 +261,58 @@ fn notify_only_requires_exactly_one_mention() {
     assert_eq!(verdict::notify_only(&rec, t).verdict, Verdict::Pass);
     rec.notes.push(rec.notes[0].clone());
     assert_eq!(verdict::notify_only(&rec, t).verdict, Verdict::Fail);
+}
+
+fn mcp(t: ProcRef, label: &str) -> ClsLite {
+    ClsLite {
+        target: t,
+        kind: Kind::McpServer,
+        signature_id: None,
+        owner_alive: Some(true),
+        owner_source: None,
+        label_ko: label.into(),
+    }
+}
+
+/// W3 3단계 S10 오탐: 같은 이름의 S1 종료 알림을 S10 알림으로 셌다. 표지(pid·프로젝트)가 있으면
+/// 그 줄은 표지 주인 것이고, 표지 없이 이름만 같으면 다른 실험실 대상의 표지가 있는 줄은 세지 않는다.
+#[test]
+fn notification_lines_are_attributed_by_marker_not_by_shared_name() {
+    let (s1, s10) = (r(10), r(11));
+    let label = "MCP 서버: chrome-devtools";
+    let mut rec = Records {
+        scans: vec![scan(T0, 1, vec![], vec![])],
+        kernel: vec![krec(s10, T0, true)],
+        notes: vec![NotifyRec {
+            at_ms: T0,
+            title: "t".into(),
+            body: format!("Android 에뮬레이터(qemu) 알림 · {label}(lab-s1) 종료(1MB 회수)"),
+        }],
+        ..Default::default()
+    };
+    rec.scans[0].classified = vec![mcp(s1, label), mcp(s10, label)];
+    rec.markers.insert(s1, vec!["s1".into(), "lab-s1".into()]);
+    rec.markers
+        .insert(s10, vec!["s10".into(), "lab-s10".into()]);
+    assert_eq!(rec.notes_about(s1, label, 0), 1);
+    assert_eq!(rec.notes_about(s10, label, 0), 0);
+    let it = verdict::never_touched("S10", "x", &rec, s10, Some(true));
+    assert_eq!(it.verdict, Verdict::Pass, "{:?}", it.checks);
+
+    rec.notes[0].body = format!("{label} 종료 (pid 11)");
+    assert_eq!(rec.notes_about(s10, label, 0), 1);
+    assert_eq!(rec.notes_about(s1, label, 0), 0);
+    assert_eq!(
+        verdict::never_touched("S10", "x", &rec, s10, Some(true)).verdict,
+        Verdict::Fail
+    );
+}
+
+#[test]
+fn tokens_need_word_boundaries() {
+    assert!(verdict::has_token("x(lab-s1) y", "lab-s1"));
+    assert!(!verdict::has_token("lab-s10", "lab-s1"));
+    assert!(!verdict::has_token("lab-s1", "s1"));
+    assert!(verdict::has_token("pid 11 종료", "pid 11"));
+    assert!(!verdict::has_token("pid 112", "pid 11"));
 }

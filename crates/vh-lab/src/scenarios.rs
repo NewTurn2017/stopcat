@@ -52,6 +52,9 @@ fn node_spec(
 }
 
 const MCP: &[&str] = &["node_modules/chrome-devtools-mcp/build/src/index.js"];
+/// S10·S11은 S1과 다른 MCP 이름을 쓴다(알림 줄을 이름으로 구분할 수 있게).
+const MCP_FS: &[&str] = &["node_modules/@modelcontextprotocol/server-filesystem/dist/index.js"];
+const MCP_MEMORY: &[&str] = &["node_modules/@modelcontextprotocol/server-memory/dist/index.js"];
 const NEXT_DEV: &[&str] = &["node_modules/.bin/next", "dev"];
 
 pub fn run(out: &Path, only: &BTreeSet<String>) -> io::Result<bool> {
@@ -124,7 +127,7 @@ fn drive(lab: &mut Lab, out: &Path, only: &BTreeSet<String>) -> io::Result<(Vec<
         for (sc, dir_name, script, listen) in [
             ("S1", "s1", MCP, false),
             ("S2", "s2", NEXT_DEV, true),
-            ("S10", "s10", MCP, false),
+            ("S10", "s10", MCP_FS, false),
         ] {
             let d = lab.dir(dir_name)?;
             std::fs::write(
@@ -283,7 +286,13 @@ fn drive(lab: &mut Lab, out: &Path, only: &BTreeSet<String>) -> io::Result<(Vec<
             let tag = lab.tag("A");
             let d = lab.dir("s11")?;
             let dead = lab.dead_pid()?;
-            let s11 = node_spec(lab, &d, MCP, &tag, &[("CLAUDE_PID", dead.to_string())]);
+            let s11 = node_spec(
+                lab,
+                &d,
+                MCP_MEMORY,
+                &tag,
+                &[("CLAUDE_PID", dead.to_string())],
+            );
             let made = lab.spawn_orphans(vec![(Meta::new("A", "S11"), s11)])?;
             refs.insert("S11", made);
             lab.registry.freeze("A");
@@ -364,6 +373,7 @@ fn drive(lab: &mut Lab, out: &Path, only: &BTreeSet<String>) -> io::Result<(Vec<
                 .as_ref()
                 .map(|x| x.undemoted.clone())
                 .unwrap_or_default(),
+            markers: markers(&refs),
         };
         let ev = |id: &str| {
             vec![
@@ -492,6 +502,30 @@ fn drive(lab: &mut Lab, out: &Path, only: &BTreeSet<String>) -> io::Result<(Vec<
     write_json(&out.join("isolation.json"), &iso)?;
     items.sort_by_key(|i| i.id.trim_start_matches('S').parse::<u32>().unwrap_or(99));
     Ok((items, iso_ok))
+}
+
+/// 알림 줄 귀속용 표지: 폴더가 있는 시나리오는 폴더 이름과 package.json 이름(`lab-<폴더>`).
+fn markers(refs: &BTreeMap<&'static str, Vec<ProcRef>>) -> BTreeMap<ProcRef, Vec<String>> {
+    let mut m = BTreeMap::new();
+    for (name, rs) in refs {
+        let dir = name.to_lowercase();
+        let with_dir = matches!(
+            *name,
+            "S1" | "S2" | "S10" | "S11" | "S3" | "S6" | "S7" | "S8" | "S9"
+        );
+        for (i, r) in rs.iter().enumerate() {
+            let mut v = Vec::new();
+            if with_dir {
+                v.push(dir.clone());
+                v.push(format!("lab-{dir}"));
+            } else if *name == "S12" {
+                v.push(format!("s12-{i}"));
+                v.push(format!("lab-s12-{i}"));
+            }
+            m.insert(*r, v);
+        }
+    }
+    m
 }
 
 fn start_guard(lab: &Lab, out: &Path, sub: &str) -> io::Result<GuardRun> {

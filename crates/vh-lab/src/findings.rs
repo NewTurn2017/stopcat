@@ -79,8 +79,10 @@ pub fn build(i: &Inputs<'_>) -> io::Result<Value> {
         )));
     }
     let edge = read(&d.join("edge/result.json"));
+    let tty = read(&d.join("termios/result.json"));
     let mut items = merge_items(items_of(&scen), reruns);
     items.extend(items_of(&edge));
+    items.extend(items_of(&tty));
     let soak = read(&d.join("soak/result.json"));
     let stress = read(&d.join("stress/result.json"));
     let interval = read(&d.join("interval/result.json"));
@@ -142,6 +144,7 @@ pub fn build(i: &Inputs<'_>) -> io::Result<Value> {
         "stress": stress,
         "edge": {"result": edge.as_ref().map(|e| json!({"all_pass": e["all_pass"], "leftover_processes": e["leftover_processes"]}))},
         "interval_ab": interval,
+        "termios_check": tty.as_ref().map(|v| json!({"all_pass": v["all_pass"], "cases": v["cases"]})),
         "isolation": {
             "stage2": i.isolation.and_then(read).map(|v| json!({"all_pass": v["all_pass"], "supervisor_kill": v["supervisor_kill"]})),
             "scenarios": read(&d.join("scenarios/isolation.json")),

@@ -44,6 +44,21 @@ pub struct Records {
     pub notes: Vec<NotifyRec>,
     pub audit: Vec<serde_json::Value>,
     pub undemoted: Vec<ProcRef>,
+    /// 실험실 대상마다 알림 줄에서 그 대상을 가리키는 표지(pid, 프로젝트 폴더·package 이름).
+    pub markers: BTreeMap<ProcRef, Vec<String>>,
+}
+
+/// `needle`이 앞뒤로 글자·숫자·`-`·`_`가 붙지 않은 채 나오는지("s1"이 "s10"·"lab-s1"에 걸리지 않게).
+pub fn has_token(hay: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    let word = |c: char| c.is_alphanumeric() || c == '-' || c == '_';
+    hay.match_indices(needle).any(|(i, _)| {
+        let before = hay[..i].chars().next_back();
+        let after = hay[i + needle.len()..].chars().next();
+        !before.is_some_and(word) && !after.is_some_and(word)
+    })
 }
 
 impl Records {
@@ -144,6 +159,39 @@ impl Records {
             .count()
     }
 
+    fn marks(&self, t: ProcRef) -> Vec<String> {
+        let mut m = vec![format!("pid {}", t.pid)];
+        m.extend(self.markers.get(&t).cloned().unwrap_or_default());
+        m
+    }
+
+    /// 알림 한 줄(본문은 " · "로 묶인 줄들)이 `t`에 대한 것인지. `t`의 표지가 있으면 그렇다.
+    /// 표지가 없으면 라벨이 같고 다른 실험실 대상의 표지가 없을 때만 `t`로 본다
+    /// (같은 이름 여러 개를 이름만으로 세지 않는다 — W3 S10 오탐).
+    pub fn line_about(&self, line: &str, t: ProcRef, label: &str) -> bool {
+        if self.marks(t).iter().any(|m| has_token(line, m)) {
+            return true;
+        }
+        if label.is_empty() || !line.contains(label) {
+            return false;
+        }
+        !self
+            .markers
+            .keys()
+            .filter(|o| **o != t)
+            .any(|o| self.marks(*o).iter().any(|m| has_token(line, m)))
+    }
+
+    /// `since_ms` 이후 알림 중 `t`에 대한 줄의 수.
+    pub fn notes_about(&self, t: ProcRef, label: &str, since_ms: u64) -> usize {
+        self.notes
+            .iter()
+            .filter(|n| n.at_ms >= since_ms)
+            .flat_map(|n| n.body.split(" · "))
+            .filter(|l| self.line_about(l, t, label))
+            .count()
+    }
+
     pub fn untouched(&self, t: ProcRef) -> bool {
         self.any_event_on(t) == 0 && self.pending_seen(t).is_empty() && self.signals_to(t.pid) == 0
     }
@@ -215,10 +263,7 @@ pub fn auto_terminated(id: &str, r: &Records, t: ProcRef, label_hint: Option<&st
     let age = ev.at_unix_ms.saturating_sub(t.start_time_unix_ms);
     let gone = r.gone_after(t, ev.at_unix_ms);
     let label = label_hint.unwrap_or(ev.label_ko.as_str()).to_string();
-    let noted = r
-        .notes
-        .iter()
-        .any(|n| n.at_ms >= ev.at_unix_ms && n.body.contains(&label));
+    let noted = r.notes_about(t, &label, ev.at_unix_ms) > 0;
     let checks = chk(&[
         ("age_ge_10m", age >= MIN_AGE_MS),
         ("age_within_window", age <= MIN_AGE_MS + TERM_WINDOW_MS),
@@ -457,11 +502,7 @@ pub fn duplicate(r: &Records, first: ProcRef, second: ProcRef) -> Item {
 pub fn notify_only(r: &Records, t: ProcRef) -> Item {
     let label = r.last_kind(t).map(|k| k.2).unwrap_or_default();
     let kind = r.last_kind(t).map(|k| k.0);
-    let n = if label.is_empty() {
-        0
-    } else {
-        r.notes_with(&label)
-    };
+    let n = r.notes_about(t, &label, 0);
     let checks = chk(&[
         ("kind_emulator", kind == Some(Kind::Emulator)),
         (
@@ -501,10 +542,7 @@ pub fn never_touched(
     let mut pairs = vec![
         ("untouched", r.untouched(t)),
         ("alive_at_end", r.alive_at_end(t)),
-        (
-            "not_in_notifications",
-            label.is_empty() || r.notes_with(&label) == 0,
-        ),
+        ("not_in_notifications", r.notes_about(t, &label, 0) == 0),
     ];
     if let Some(want) = owner_alive {
         pairs.push((
@@ -516,7 +554,7 @@ pub fn never_touched(
         id,
         expected,
         chk(&pairs),
-        serde_json::json!({"kind": k.as_ref().map(|k| k.0), "owner_alive": k.as_ref().and_then(|k| k.1), "last_finding": r.last_finding(t)}),
+        serde_json::json!({"kind": k.as_ref().map(|k| k.0), "owner_alive": k.as_ref().and_then(|k| k.1), "last_finding": r.last_finding(t), "label": label, "notification_lines_about_target": r.notes_about(t, &label, 0), "notification_lines_with_label": r.notes_with(&label)}),
     );
     if it.verdict == Verdict::Fail {
         it.suspected_owner = "GUARD".into();
