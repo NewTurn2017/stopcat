@@ -10,7 +10,7 @@ use vh_model::{
 
 use crate::protect::{check, refusal};
 use crate::rule::*;
-use crate::{Policy, ProtectCtx, Selection};
+use crate::{Policy, PriorityTarget, ProtectCtx, Selection};
 
 const MAX_ANCESTORS: usize = 64;
 const MAX_SUBTREE: usize = 4096;
@@ -297,6 +297,89 @@ pub(crate) fn plan(s: &Snapshot, r: &Report, sel: &Selection, policy: &Policy) -
         }
     }
 
+    ActionPlan {
+        created_at_unix_ms: now_ms(),
+        total_deadline_ms: policy.total_deadline_ms,
+        items,
+        refused,
+    }
+}
+
+/// Demote·Undemote 전용 계획(W2). 신호 0회.
+pub(crate) fn plan_priority(
+    s: &Snapshot,
+    r: Option<&Report>,
+    targets: &[PriorityTarget],
+    policy: &Policy,
+) -> ActionPlan {
+    let idx = SnapIndex::new(s);
+    let kinds: HashMap<ProcRef, Kind> = r
+        .map(|r| r.classified.iter().map(|c| (c.target, c.kind)).collect())
+        .unwrap_or_default();
+    let self_ancestors = idx.ancestors(s.self_pid);
+
+    let mut items: Vec<PlannedAction> = Vec::new();
+    let mut refused: Vec<Refusal> = Vec::new();
+    for t in targets {
+        if items.iter().any(|i| i.target == t.target) {
+            continue;
+        }
+        let prefix = match t.step {
+            Step::Demote => "demote",
+            Step::Undemote => "undemote",
+            Step::Cont | Step::Term | Step::Kill => {
+                refused.push(refusal(
+                    t.target,
+                    R17_PRIORITY_STEP_ONLY,
+                    "우선순위 계획에는 Demote·Undemote만 넣을 수 있습니다",
+                ));
+                continue;
+            }
+        };
+        let snap = idx.get(t.target);
+        if t.step == Step::Demote && snap.is_none() {
+            refused.push(refusal(
+                t.target,
+                R14_START_TIME_MISMATCH,
+                "스냅샷에서 이 프로세스를 찾지 못했습니다(이미 끝났거나 PID가 재사용됨). 건드리지 않습니다",
+            ));
+            continue;
+        }
+        let ctx = ProtectCtx {
+            target: t.target,
+            live: None,
+            snap,
+            kind: kinds.get(&t.target).copied(),
+            self_pid: s.self_pid,
+            self_uid: s.self_uid,
+            self_ancestors: &self_ancestors,
+            // 우선순위는 프로세스 단위라 자손의 Kind(R09)는 보지 않는다.
+            subtree_kinds: &[],
+        };
+        if let Some(rf) = check(&ctx) {
+            refused.push(rf);
+            continue;
+        }
+        items.push(PlannedAction {
+            finding_id: format!("{prefix}:{}:{}", t.target.pid, t.target.start_time_unix_ms),
+            target: t.target,
+            include_descendants: false,
+            descendant_count: 0,
+            steps: vec![t.step],
+            grace_ms: policy.grace_ms,
+            reason_ko: t.reason_ko.clone(),
+            est_reclaim_bytes: 0,
+        });
+    }
+    if items.len() > policy.max_actions {
+        let reason = format!(
+            "한 번에 정리할 수 있는 개수({})를 넘었어요",
+            policy.max_actions
+        );
+        for cut in items.split_off(policy.max_actions) {
+            refused.push(refusal(cut.target, R16_MAX_ACTIONS, &reason));
+        }
+    }
     ActionPlan {
         created_at_unix_ms: now_ms(),
         total_deadline_ms: policy.total_deadline_ms,

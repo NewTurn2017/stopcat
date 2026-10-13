@@ -233,6 +233,22 @@ impl<'e, 'a> Run<'e, 'a> {
             };
             return self.outcome(it, FinalState::StillAlive, note);
         }
+        if a.steps.contains(&Step::Undemote) {
+            let res = self.env.signaler.undemote(t.pid);
+            it.steps.push(StepResult {
+                step: Step::Undemote,
+                pid: t.pid,
+                at_unix_ms: self.now(),
+                ok: res.is_ok(),
+                errno: res.err(),
+            });
+            self.ev(&it, t.pid, AuditEvent::Undemote, res.is_ok(), res.err(), "");
+            let note = match res {
+                Ok(()) => "우선순위를 되돌렸습니다".to_string(),
+                Err(e) => format!("우선순위 되돌리기 실패(errno {e})"),
+            };
+            return self.outcome(it, FinalState::StillAlive, note);
+        }
         if a.steps.contains(&Step::Cont) {
             let note = match self.send(&mut it, t.pid, Step::Cont) {
                 Ok(()) => "재개했습니다. 다음 vh 실행에서 다시 판단합니다".to_string(),

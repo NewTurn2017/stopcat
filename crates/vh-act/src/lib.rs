@@ -1,7 +1,9 @@
 //! vh-act: 정리 계획과 단계적 종료 사다리 (ACT 소유).
 //!
 //! 사용자 맥의 프로세스에 신호를 보내는 유일한 코드다. 신호는 [`Signaler`] 구현을 거쳐서만
-//! 나가고, 보내기 전에 보호 규칙(R01~R15)과 `start_time` 재확인을 통과해야 한다.
+//! 나가고, 보내기 전에 보호 규칙(R01~R17)과 `start_time` 재확인을 통과해야 한다.
+//! W2: `Step::Undemote`(낮춘 우선순위 되돌리기)와 Finding 없이 Demote·Undemote만 계획하는
+//! [`plan_priority`]를 더했다(지킴이 vh-guard가 쓴다).
 //! 이 크레이트는 사용자에게 묻지 않는다(확인은 CLI 몫).
 
 use std::cell::{Cell, RefCell};
@@ -20,7 +22,7 @@ pub mod rule;
 mod store;
 
 use vh_model::{
-    ActionOutcome, ActionPlan, Confidence, Kind, Proc, ProcRef, Refusal, Report, Snapshot,
+    ActionOutcome, ActionPlan, Confidence, Kind, Proc, ProcRef, Refusal, Report, Snapshot, Step,
 };
 
 /// 어떤 Finding·대상을 실행 후보로 삼을지. CLI가 채운다.
@@ -172,6 +174,14 @@ pub trait Signaler {
     fn send(&self, pid: i32, sig: i32) -> Result<(), i32>;
     /// `setpriority(PRIO_DARWIN_PROCESS, pid, PRIO_DARWIN_BG)`. Err(errno).
     fn demote(&self, pid: i32) -> Result<(), i32>;
+    /// `setpriority(PRIO_DARWIN_PROCESS, pid, 0)`: demote를 되돌린다(W2). Err(errno).
+    ///
+    /// 기본 구현은 `Err(EPERM)`이다. 구현하지 않은 signaler(잠금 signaler 등)는 되돌리기를
+    /// 거부한다(닫힌 쪽으로 실패). 진짜·가짜 signaler는 직접 구현한다.
+    fn undemote(&self, pid: i32) -> Result<(), i32> {
+        let _ = pid;
+        Err(libc::EPERM)
+    }
 }
 
 /// 진짜 커널 읽기.
@@ -215,6 +225,8 @@ pub struct FakeSignaler {
     pub world: Option<SharedWorld>,
     pub sent: RefCell<Vec<(i32, i32)>>,
     pub demoted: RefCell<Vec<i32>>,
+    /// undemote를 받은 pid(W2).
+    pub undemoted: RefCell<Vec<i32>>,
     /// Some(errno)면 모든 호출이 그 errno로 실패.
     pub fail_with: Option<i32>,
 }
@@ -276,6 +288,8 @@ pub enum AuditEvent {
     Term,
     Kill,
     Demote,
+    /// W2: 낮춘 우선순위 되돌리기.
+    Undemote,
     Exited,
     StillAlive,
     Reused,
@@ -288,6 +302,19 @@ pub enum AuditEvent {
 /// 폴더가 없으면 0700으로 만든다.
 pub fn state_dir() -> std::io::Result<PathBuf> {
     store::state_dir()
+}
+
+/// [`state_dir`]와 같은 규칙으로 경로만 계산한다. 폴더를 만들지 않는다(설정 읽기 전용 경로용, W2).
+pub fn state_dir_path() -> std::io::Result<PathBuf> {
+    store::state_dir_path()
+}
+
+/// Finding 없이 우선순위만 바꾸는 계획의 대상(W2, 지킴이용). `step`은 Demote 또는 Undemote.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PriorityTarget {
+    pub target: ProcRef,
+    pub step: Step,
+    pub reason_ko: String,
 }
 
 /// `<state>/audit.jsonl`
@@ -307,6 +334,23 @@ pub fn revive_dir(state_dir: &Path) -> PathBuf {
 /// `policy.max_actions`를 넘는 항목은 버리지 않고 `R16_max_actions` 거부로 남긴다.
 pub fn plan(s: &Snapshot, r: &Report, sel: &Selection, policy: &Policy) -> ActionPlan {
     planner::plan(s, r, sel, policy)
+}
+
+/// Demote·Undemote 전용 계획(W2). 신호 0회. finding_id는 `demote:<pid>:<start_ms>` / `undemote:<pid>:<start_ms>`.
+///
+/// - `step`이 Demote·Undemote가 아니면 `R17_priority_step_only`로 거부.
+/// - Demote는 스냅샷에 같은 ProcRef가 있어야 한다(없으면 `R14`). 계획 때 보호 규칙(R01~R10)을
+///   `r`의 Kind와 함께 적용한다.
+/// - Undemote는 스냅샷에 없어도 계획한다(되돌리기를 거부하는 쪽이 더 나쁜 실패다). 생사·start_time·
+///   보호 규칙은 `execute`의 신호 직전 확인이 다시 본다.
+/// - `est_reclaim_bytes` 0, `include_descendants` false, `grace_ms` = `policy.grace_ms`, `R16` 적용.
+pub fn plan_priority(
+    s: &Snapshot,
+    r: Option<&Report>,
+    targets: &[PriorityTarget],
+    policy: &Policy,
+) -> ActionPlan {
+    planner::plan_priority(s, r, targets, policy)
 }
 
 /// 계획을 실행한다. 사용자에게 묻지 않는다. 결과는 `plan.items`와 같은 순서·개수.

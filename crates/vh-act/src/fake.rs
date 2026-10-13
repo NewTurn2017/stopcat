@@ -50,9 +50,9 @@ impl FakeSignaler {
         }
     }
 
-    /// 지금까지 받은 호출 수(신호 + demote).
+    /// 지금까지 받은 호출 수(신호 + demote + undemote).
     pub fn calls(&self) -> usize {
-        self.sent.borrow().len() + self.demoted.borrow().len()
+        self.sent.borrow().len() + self.demoted.borrow().len() + self.undemoted.borrow().len()
     }
 }
 
@@ -154,6 +154,22 @@ impl Signaler for FakeSignaler {
             return Err(libc::ESRCH);
         }
         w.bg.insert(pid, libc::PRIO_DARWIN_BG);
+        Ok(())
+    }
+
+    fn undemote(&self, pid: i32) -> Result<(), i32> {
+        self.undemoted.borrow_mut().push(pid);
+        if let Some(e) = self.fail_with {
+            return Err(e);
+        }
+        let Some(world) = &self.world else {
+            return Ok(());
+        };
+        let mut w = world.borrow_mut();
+        if !w.procs.contains_key(&pid) {
+            return Err(libc::ESRCH);
+        }
+        w.bg.remove(&pid);
         Ok(())
     }
 }

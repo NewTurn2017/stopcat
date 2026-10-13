@@ -12,6 +12,12 @@ vh-analyze = { workspace = true }
 vh-act = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+libc = { workspace = true }
+tempfile = { workspace = true }
+
+[dev-dependencies]
+# 합성 2,000 프로세스 스냅샷(성능 테스트). dev-dep에서만 켜므로 일반 빌드에 새지 않는다.
+vh-analyze = { workspace = true, features = ["synth"] }
 
 [lints]
 workspace = true

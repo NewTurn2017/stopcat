@@ -39,10 +39,15 @@ pub(crate) fn ensure_dir(dir: &Path) -> io::Result<()> {
 }
 
 pub(crate) fn state_dir() -> io::Result<PathBuf> {
-    let cwd = std::env::current_dir()?;
-    let dir = resolve_state_dir(std::env::var_os(STATE_ENV), std::env::var_os("HOME"), &cwd)?;
+    let dir = state_dir_path()?;
     ensure_dir(&dir)?;
     Ok(dir)
+}
+
+/// 경로만 계산한다(폴더를 만들지 않는다).
+pub(crate) fn state_dir_path() -> io::Result<PathBuf> {
+    let cwd = std::env::current_dir()?;
+    resolve_state_dir(std::env::var_os(STATE_ENV), std::env::var_os("HOME"), &cwd)
 }
 
 fn force_0600(f: &fs::File) -> io::Result<()> {

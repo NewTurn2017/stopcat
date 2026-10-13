@@ -200,6 +200,15 @@ impl Signaler for RealSignaler {
         };
         if rc == 0 { Ok(()) } else { Err(errno()) }
     }
+
+    fn undemote(&self, pid: i32) -> Result<(), i32> {
+        if pid <= 1 {
+            return Err(libc::EPERM);
+        }
+        // SAFETY: pid > 1 단일 프로세스 대상. 0 = 기본 우선순위(PRIO_DARWIN_BG 해제).
+        let rc = unsafe { libc::setpriority(libc::PRIO_DARWIN_PROCESS, pid as libc::id_t, 0) };
+        if rc == 0 { Ok(()) } else { Err(errno()) }
+    }
 }
 
 #[cfg(test)]
@@ -233,6 +242,7 @@ mod tests {
         for pid in [-1, 0, 1] {
             assert_eq!(RealSignaler.send(pid, libc::SIGTERM), Err(libc::EPERM));
             assert_eq!(RealSignaler.demote(pid), Err(libc::EPERM));
+            assert_eq!(RealSignaler.undemote(pid), Err(libc::EPERM));
         }
     }
 
