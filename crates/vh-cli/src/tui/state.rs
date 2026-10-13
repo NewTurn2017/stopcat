@@ -7,13 +7,15 @@ use std::sync::Arc;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use vh_act::{Policy, Selection};
 use vh_model::{
-    ActionPlan, AutoLevel, Confidence, FindingKind, GuardEvent, GuardEventKind, GuardPolicy,
-    GuardStatus, Kind, ProcRef, Report, Snapshot, Step, Suggestion, VhConfig,
+    ActionPlan, AutoLevel, Classified, Confidence, Finding, FindingKind, GuardEvent,
+    GuardEventKind, GuardPolicy, GuardStatus, Kind, ProcRef, Report, Snapshot, Step, Suggestion,
+    VhConfig,
 };
 
 use super::link::{Cmd, ManualResult, Update};
 use crate::fmt;
 use crate::render::status::{Bucket, bucket};
+
 use crate::render::{Lookup, action, confidence_ko, scope_ko, why};
 use crate::target::Target;
 
@@ -173,7 +175,11 @@ pub struct Row {
     pub mark: Mark,
     pub actionable: bool,
     pub target: Option<ProcRef>,
-    /// (이름, 내용) — 자세히 칸.
+    /// 대상이 하나일 때만: 나이 칸은 그릴 때 스냅샷 시각에서 뺀다(다시 만들지 않아도 나이가 흐른다).
+    pub started_unix_ms: Option<u64>,
+    /// 프로젝트 폴더 이름.
+    pub project: Option<String>,
+    /// (이름, 내용) — 자세히 칸의 '무엇'·'왜'. '대상'·'지킴이'는 그릴 때 붙인다.
     pub detail: Vec<(&'static str, String)>,
 }
 
@@ -193,8 +199,18 @@ pub struct PortRow {
 pub struct Latest {
     pub snapshot: Arc<Snapshot>,
     pub report: Arc<Report>,
-    pub policy: GuardPolicy,
+    pub policy: Arc<GuardPolicy>,
     pub status: GuardStatus,
+}
+
+/// 목록에 쓰는 발견 대상 하나의 이름·종류·프로젝트·포트(갱신마다 이것만 찾는다).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TargetInfo {
+    pub target: ProcRef,
+    pub kind: Option<Kind>,
+    pub label: String,
+    pub project: Option<String>,
+    pub port: Option<u16>,
 }
 
 /// 이번 화면 세션에서 지킴이가 한 일 합계(기록 탭 첫 줄·끝낼 때 요약).
@@ -230,6 +246,11 @@ pub struct Model {
     pub width: u16,
     pub height: u16,
     pub config_path: String,
+    /// 목록 행을 다시 만든 횟수(같은 보고서면 그대로).
+    pub rebuilds: u64,
+    /// 포트 행을 다시 만든 횟수.
+    pub port_rebuilds: u64,
+    targets: Vec<TargetInfo>,
     next_request: u64,
 }
 
@@ -294,6 +315,9 @@ impl Model {
             width: MIN_WIDTH,
             height: MIN_HEIGHT,
             config_path: String::new(),
+            rebuilds: 0,
+            port_rebuilds: 0,
+            targets: Vec::new(),
             next_request: 1,
         }
     }
@@ -373,14 +397,37 @@ impl Model {
             self.events.push_front(e);
         }
         self.events.truncate(MAX_EVENTS);
-        self.rows = build_rows(&u.snapshot, &u.report, &u.policy, &u.status);
-        self.ports = build_ports(&u.snapshot, &u.report);
-        let ids: BTreeSet<&str> = self.rows.iter().map(|r| r.finding_id.as_str()).collect();
-        self.selected.retain(|id| ids.contains(id.as_str()));
-        if let Some(id) = keep_id
-            && let Some(i) = self.rows.iter().position(|r| r.finding_id == id)
-        {
-            self.cursor[0] = i;
+        let same_arc = self.latest.as_ref().is_some_and(|l| {
+            Arc::ptr_eq(&l.report, &u.report) && Arc::ptr_eq(&l.snapshot, &u.snapshot)
+        });
+        let same_report = same_arc || {
+            let fresh = target_infos(&u.snapshot, &u.report);
+            let same = self.latest.as_ref().is_some_and(|l| {
+                l.report.findings == u.report.findings
+                    && l.report.listeners == u.report.listeners
+                    && self.targets == fresh
+            });
+            self.targets = fresh;
+            same
+        };
+        let same_marks = self
+            .latest
+            .as_ref()
+            .is_some_and(|l| same_marks(l, &u.policy, &u.status));
+        if !(same_report && same_marks) {
+            self.rows = rows_from(&u.report, &self.targets, &u.policy, &u.status);
+            self.rebuilds += 1;
+            let ids: BTreeSet<&str> = self.rows.iter().map(|r| r.finding_id.as_str()).collect();
+            self.selected.retain(|id| ids.contains(id.as_str()));
+            if let Some(id) = keep_id
+                && let Some(i) = self.rows.iter().position(|r| r.finding_id == id)
+            {
+                self.cursor[0] = i;
+            }
+        }
+        if !same_report {
+            self.ports = build_ports(&u.report);
+            self.port_rebuilds += 1;
         }
         for t in Tab::ALL {
             let n = self.list_len(t);
@@ -823,16 +870,122 @@ pub fn selection_for(r: &Report, ids: &[String]) -> Selection {
     }
 }
 
-fn kind_of(lk: &Lookup<'_>, t: Option<ProcRef>) -> Option<Kind> {
-    t.and_then(|t| lk.classified(t)).map(|c| c.kind)
+/// 발견들의 첫 대상만 이름·종류·프로젝트·가장 작은 대기 포트를 찾는다. 전체 프로세스로 색인(HashMap)을
+/// 만들지 않고 보고서·스냅샷을 한 번씩 훑어 발견 수만큼만 담는다(갱신마다 프로세스 수에 비례한 할당을 피함).
+pub fn target_infos(s: &Snapshot, r: &Report) -> Vec<TargetInfo> {
+    let mut refs: Vec<ProcRef> = r
+        .findings
+        .iter()
+        .filter_map(|f| f.targets.first().copied())
+        .collect();
+    refs.sort();
+    refs.dedup();
+    let mut cls: Vec<Option<&Classified>> = vec![None; refs.len()];
+    for c in &r.classified {
+        if let Ok(i) = refs.binary_search(&c.target) {
+            cls[i] = Some(c);
+        }
+    }
+    let mut names: Vec<Option<&str>> = vec![None; refs.len()];
+    for p in &s.processes {
+        let t = ProcRef {
+            pid: p.pid,
+            start_time_unix_ms: p.start_time_unix_ms,
+        };
+        if let Ok(i) = refs.binary_search(&t) {
+            names[i] = Some(p.name.as_str());
+        }
+    }
+    let mut ports: Vec<Option<u16>> = vec![None; refs.len()];
+    for v in &r.listeners {
+        let t = ProcRef {
+            pid: v.listener.pid,
+            start_time_unix_ms: v.listener.start_time_unix_ms,
+        };
+        if let Ok(i) = refs.binary_search(&t) {
+            let port = v.listener.port;
+            ports[i] = Some(ports[i].map_or(port, |p| p.min(port)));
+        }
+    }
+    refs.into_iter()
+        .enumerate()
+        .map(|(i, t)| {
+            let c = cls[i];
+            let label = match c.filter(|c| !c.label_ko.is_empty()) {
+                Some(c) => c.label_ko.clone(),
+                None => names[i]
+                    .map(str::to_string)
+                    .unwrap_or_else(|| format!("{}번 프로세스", t.pid)),
+            };
+            TargetInfo {
+                target: t,
+                kind: c.map(|c| c.kind),
+                label,
+                project: c.and_then(|c| c.project.as_deref()).map(project_name),
+                port: ports[i],
+            }
+        })
+        .collect()
+}
+
+/// 목록 대상 칸 이름. 크기·나이가 붙는 짧은 이름을 쓰던 종류는 분류 이름(+ 대기 포트)만 쓰고
+/// 크기·나이는 각 칸에 둔다. CPU %·개수처럼 다른 칸이 없는 정보를 담은 종류는 그대로.
+fn list_name(f: &Finding, b: Bucket, info: Option<&TargetInfo>) -> String {
+    let by_name = f.targets.len() == 1
+        && matches!(
+            f.kind,
+            FindingKind::Orphan
+                | FindingKind::LogicalOrphan
+                | FindingKind::HeadlessBrowserLeftover
+                | FindingKind::HeavyAgentSession
+                | FindingKind::HeavyProcess
+        );
+    match info {
+        Some(i) if by_name => match i.port {
+            Some(p) => format!("{} :{p}", i.label),
+            None => i.label.clone(),
+        },
+        _ if b == Bucket::Watch || f.short_ko.is_empty() => f.title_ko.clone(),
+        _ => f.short_ko.clone(),
+    }
+}
+
+/// 표시 상태(지킴이 표시에 쓰는 것)가 직전 갱신과 같은지.
+fn same_marks(l: &Latest, policy: &GuardPolicy, st: &GuardStatus) -> bool {
+    let pending_same = l.status.pending.len() == st.pending.len()
+        && l.status.pending.iter().zip(&st.pending).all(|(a, b)| {
+            a.finding_id == b.finding_id
+                && a.step == b.step
+                && a.seen_scans == b.seen_scans
+                && a.needed_scans == b.needed_scans
+        });
+    pending_same
+        && l.status.circuit_open == st.circuit_open
+        && l.status.demoted == st.demoted
+        && l.policy.auto_terminate_kinds == policy.auto_terminate_kinds
+        && l.policy.notify_only_kinds == policy.notify_only_kinds
 }
 
 pub fn build_rows(s: &Snapshot, r: &Report, policy: &GuardPolicy, st: &GuardStatus) -> Vec<Row> {
-    let lk = Lookup::new(s, r);
+    rows_from(r, &target_infos(s, r), policy, st)
+}
+
+fn rows_from(
+    r: &Report,
+    targets: &[TargetInfo],
+    policy: &GuardPolicy,
+    st: &GuardStatus,
+) -> Vec<Row> {
     let mut rows = Vec::new();
     for f in &r.findings {
         let target = f.targets.first().copied();
-        let kind = kind_of(&lk, target);
+        let info = target.and_then(|t| {
+            targets
+                .binary_search_by(|x| x.target.cmp(&t))
+                .ok()
+                .map(|i| &targets[i])
+        });
+        let kind = info.and_then(|i| i.kind);
         let Some(b) = bucket(f, kind) else { continue };
         let tag = match b {
             Bucket::Watch => "주의",
@@ -872,26 +1025,11 @@ pub fn build_rows(s: &Snapshot, r: &Report, policy: &GuardPolicy, st: &GuardStat
         } else {
             Mark::Manual
         };
-        let label = if b == Bucket::Watch || f.short_ko.is_empty() {
-            f.title_ko.clone()
-        } else {
-            f.short_ko.clone()
-        };
+        let label = list_name(f, b, info);
         let mut detail: Vec<(&'static str, String)> = vec![("무엇", f.title_ko.clone())];
         if !f.detail_ko.is_empty() {
             detail.push(("왜", f.detail_ko.clone()));
         }
-        if let Some(t) = target {
-            let mut info = format!("pid {}", t.pid);
-            if let Some(age) = lk.age(t) {
-                info.push_str(&format!(" · {age}째"));
-            }
-            if let Some(p) = lk.classified(t).and_then(|c| c.project.as_deref()) {
-                info.push_str(&format!(" · 프로젝트 {}", project_name(p)));
-            }
-            detail.push(("대상", info));
-        }
-        detail.push(("지킴이", mark.explain()));
         rows.push(Row {
             finding_id: f.id.clone(),
             tag,
@@ -901,6 +1039,10 @@ pub fn build_rows(s: &Snapshot, r: &Report, policy: &GuardPolicy, st: &GuardStat
             mark,
             actionable,
             target,
+            started_unix_ms: (f.targets.len() == 1)
+                .then(|| target.map(|t| t.start_time_unix_ms))
+                .flatten(),
+            project: info.and_then(|i| i.project.clone()),
             detail,
         });
     }
@@ -914,8 +1056,8 @@ pub fn build_rows(s: &Snapshot, r: &Report, policy: &GuardPolicy, st: &GuardStat
     rows
 }
 
-pub fn build_ports(s: &Snapshot, r: &Report) -> Vec<PortRow> {
-    let lk = Lookup::new(s, r);
+/// 포트 행. 나이 줄은 그릴 때 붙인다.
+pub fn build_ports(r: &Report) -> Vec<PortRow> {
     let mut out: Vec<PortRow> = Vec::new();
     for v in &r.listeners {
         let l = &v.listener;
@@ -945,10 +1087,7 @@ pub fn build_ports(s: &Snapshot, r: &Report) -> Vec<PortRow> {
         } else {
             ("", format!("{} · pid {}", v.label_ko, l.pid))
         };
-        let mut detail = vec![detail];
-        if let Some(age) = lk.age(target) {
-            detail.push(format!("{age}째 실행 중"));
-        }
+        let detail = vec![detail];
         out.push(PortRow {
             port: l.port,
             target,

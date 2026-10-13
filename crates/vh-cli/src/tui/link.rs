@@ -14,7 +14,7 @@ use vh_model::{
 pub struct Update {
     pub snapshot: Arc<Snapshot>,
     pub report: Arc<Report>,
-    pub policy: GuardPolicy,
+    pub policy: Arc<GuardPolicy>,
     pub status: GuardStatus,
     pub new_events: Vec<GuardEvent>,
     pub manual_result: Option<ManualResult>,

@@ -7,11 +7,41 @@ mod tui_common;
 use common::*;
 use crossterm::event::KeyCode;
 use tui_common::*;
+use vh_cli::fmt;
 use vh_cli::tui::state::{Dialog, Model, Tab};
 use vh_cli::tui::view::{self, FIRST_RUN_LINES, KEYS_FIRST_RUN, TOO_SMALL};
 use vh_model::*;
 
 const SIZES: [(u16, u16); 2] = [(80, 24), (120, 40)];
+
+/// 정상 상태 목록(머리줄 + 6줄), 80칸. 이름에는 크기·나이가 없고 각 칸에 있다(PM-2).
+const LIST_80: [&str; 7] = [
+    "      종류  대상                        크기  나이   신뢰도       지킴이",
+    "> [ ] 고아  codex app-server           1.0GB  3일    확실         자동 예정 1/2",
+    "  [ ] 잔재  appium (앱 테스트) :4723   412MB  2일    가능성 높음  직접 정리",
+    "  [ ] 잔재  headless Chrome (Chrome …  380MB  7시간  가능성 높음  직접 정리",
+    "  [ ] 잔재  Android 에뮬레이터 (qemu)  7.5GB  3일    가능성 높음  알림만",
+    "  [ ] 주의  omo 세션(bun)                     5일                 끄지 않음",
+    "  [ ] 잔재  aside 좀비 20개                   2일    확실         앱 재시작 필요",
+];
+
+const LIST_120: [&str; 7] = [
+    "      종류  대상                                                                크기  나이   신뢰도       지킴이",
+    "> [ ] 고아  codex app-server                                                   1.0GB  3일    확실         자동 예정 1/2",
+    "  [ ] 잔재  appium (앱 테스트) :4723                                           412MB  2일    가능성 높음  직접 정리",
+    "  [ ] 잔재  headless Chrome (Chrome for Testing)                               380MB  7시간  가능성 높음  직접 정리",
+    "  [ ] 잔재  Android 에뮬레이터 (qemu)                                          7.5GB  3일    가능성 높음  알림만",
+    "  [ ] 주의  omo 세션(bun)                                                             5일                 끄지 않음",
+    "  [ ] 잔재  aside 좀비 20개                                                           2일    확실         앱 재시작 필요",
+];
+
+fn list_block(l: &[String]) -> Vec<String> {
+    let i = l
+        .iter()
+        .position(|x| x.starts_with("      종류  대상"))
+        .expect("목록 머리줄");
+    l[i..i + 7].to_vec()
+}
 
 fn both(m: &mut Model) -> Vec<Vec<String>> {
     SIZES
@@ -33,8 +63,9 @@ fn normal_findings_tab() {
         assert!(l[1].contains("지킴이 안전 자동 · 켜짐 · 자동 종료 0/5(10분) · 확인 "));
         assert!(l[2].starts_with("[1 정리할 것 6]"), "{}", l[2]);
         assert!(has(&l, "codex app-server") && has(&l, "자동 예정 1/2"));
-        assert!(has(&l, "Android 에뮬레이터 7.5GB") && has(&l, "알림만"));
-        assert!(has(&l, "omo 세션(bun) 22GB, 5일째") && has(&l, "끄지 않음"));
+        assert!(has(&l, "Android 에뮬레이터 (qemu)") && has(&l, "알림만"));
+        assert!(!has(&l, "에뮬레이터 7.5GB") && !has(&l, "22GB, 5일째"));
+        assert!(has(&l, "omo 세션(bun)") && has(&l, "끄지 않음"));
         assert!(has(&l, "앱 재시작 필요"));
         assert!(!has(&l, "테스트 서버 :18788"), "가능성 있음은 숨김");
         assert!(has(&l, "─ 자세히: codex app-server"));
@@ -42,6 +73,40 @@ fn normal_findings_tab() {
     }
     let first = m.rows.first().unwrap();
     assert_eq!(first.mark.text(), "자동 예정 1/2", "자동 예정이 맨 위");
+    assert_eq!(list_block(&render(&mut m, 80, 24)), LIST_80);
+    assert_eq!(list_block(&render(&mut m, 120, 40)), LIST_120);
+    let l = render(&mut m, 80, 24);
+    assert!(has(
+        &l,
+        "대상    pid 51234 · 3일 2시간째 · 프로젝트 warmtalent-ai"
+    ));
+}
+
+/// 목록 이름에 그 줄의 크기·나이 문자열이 들어 있지 않다(정상·위기, 두 크기).
+#[test]
+fn list_names_have_no_size_or_age() {
+    let s = snapshot();
+    let crisis = report_crisis(&s);
+    let mut cm = Model::new(Some(done_config(AutoLevel::Safe)), None, false);
+    cm.apply(update_from(crisis, AutoLevel::Safe, |_, st| {
+        st.circuit_open = true;
+    }));
+    for mut m in [main_model(), cm] {
+        assert!(!m.rows.is_empty());
+        for r in &m.rows {
+            if let Some(b) = r.size {
+                assert!(!r.label.contains(&fmt::bytes(b)), "{}", r.label);
+            }
+            if let Some(st) = r.started_unix_ms {
+                let ms = T0 - st;
+                assert!(!r.label.contains(&fmt::age_short(ms)), "{}", r.label);
+                assert!(!r.label.contains(&fmt::duration(ms)), "{}", r.label);
+            }
+        }
+        for l in both(&mut m) {
+            assert!(l.iter().any(|x| x.contains("크기  나이   신뢰도")));
+        }
+    }
 }
 
 #[test]

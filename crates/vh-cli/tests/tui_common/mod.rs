@@ -66,7 +66,7 @@ pub fn update_from(
     Update {
         snapshot: Arc::new(s),
         report: Arc::new(rep),
-        policy: GuardPolicy::for_level(level),
+        policy: Arc::new(GuardPolicy::for_level(level)),
         status: st,
         new_events: vec![],
         manual_result: None,

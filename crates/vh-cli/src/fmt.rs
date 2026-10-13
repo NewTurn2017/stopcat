@@ -47,6 +47,20 @@ pub fn duration(ms: u64) -> String {
     }
 }
 
+/// 목록 나이 칸용: 가장 큰 단위 하나만("방금", "12분", "7시간", "3일"). 폭 ≤ 6.
+pub fn age_short(ms: u64) -> String {
+    let mins = ms / 60_000;
+    if mins < 1 {
+        "방금".to_string()
+    } else if mins < 60 {
+        format!("{mins}분")
+    } else if mins < 24 * 60 {
+        format!("{}시간", mins / 60)
+    } else {
+        format!("{}일", mins / (24 * 60))
+    }
+}
+
 /// 밀리초 → "3초", "1.5초".
 pub fn secs(ms: u32) -> String {
     if ms.is_multiple_of(1000) {
@@ -193,6 +207,11 @@ mod tests {
         assert_eq!(duration(7 * 3_600_000), "7시간");
         assert_eq!(duration((3 * 24 + 4) * 3_600_000), "3일 4시간");
         assert_eq!(duration(5 * 24 * 3_600_000), "5일");
+        assert_eq!(age_short(59_000), "방금");
+        assert_eq!(age_short(12 * 60_000), "12분");
+        assert_eq!(age_short(7 * 3_600_000), "7시간");
+        assert_eq!(age_short((3 * 24 + 4) * 3_600_000), "3일");
+        assert!(width(&age_short(23 * 3_600_000)) <= 6);
         assert_eq!(secs(3000), "3초");
         assert_eq!(secs(1500), "1.5초");
     }

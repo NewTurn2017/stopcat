@@ -315,21 +315,48 @@ fn wrap_pairs(s: &mut Screen, pairs: &[(&str, String)], max: usize) {
     }
 }
 
-pub fn finding_row(r: &Row, cur: bool, picked: bool, w: usize) -> String {
-    let lw = 30 + w.saturating_sub(80);
+/// 80칸에서 대상 칸 폭. 넓은 창에서는 늘어난 만큼 더한다.
+const NAME_W: usize = 26;
+
+/// 목록 한 줄. `now_unix_ms`는 스냅샷 시각(나이 칸).
+pub fn finding_row(r: &Row, cur: bool, picked: bool, w: usize, now_unix_ms: u64) -> String {
+    let lw = NAME_W + w.saturating_sub(80);
     let label = truncate(&r.label, lw - 1);
     let size = r.size.map(fmt::bytes).unwrap_or_default();
+    let age = r
+        .started_unix_ms
+        .map(|s| fmt::age_short(now_unix_ms.saturating_sub(s)))
+        .unwrap_or_default();
     let conf = r.confidence.map(confidence_ko).unwrap_or("");
     format!(
-        "{}{}{}{}{}  {}{}",
+        "{}{}{}{}{}  {}{}{}",
         if cur { "> " } else { "  " },
         if picked { "[x] " } else { "[ ] " },
         pad(r.tag, 6),
         pad(&label, lw),
         lpad(&size, 6),
+        pad(&age, 7),
         pad(conf, 13),
         r.mark.text()
     )
+}
+
+/// 자세히 칸: 무엇·왜 + 대상(pid·나이·프로젝트) + 지킴이.
+pub fn finding_detail(r: &Row, now_unix_ms: u64) -> Vec<(&'static str, String)> {
+    let mut d = r.detail.clone();
+    if let Some(t) = r.target {
+        let mut info = format!(
+            "pid {} · {}째",
+            t.pid,
+            fmt::duration(now_unix_ms.saturating_sub(t.start_time_unix_ms))
+        );
+        if let Some(p) = &r.project {
+            info.push_str(&format!(" · 프로젝트 {p}"));
+        }
+        d.push(("대상", info));
+    }
+    d.push(("지킴이", r.mark.explain()));
+    d
 }
 
 fn findings_body(s: &mut Screen, m: &Model, body_h: usize) {
@@ -356,18 +383,20 @@ fn findings_body(s: &mut Screen, m: &Model, body_h: usize) {
     }
     let dh = detail_h(body_h);
     let list_h = body_h - 2 - dh;
-    let lw = 30 + s.w.saturating_sub(80);
+    let lw = NAME_W + s.w.saturating_sub(80);
+    let now = m.latest.as_ref().map_or(0, |l| l.snapshot.taken_at_unix_ms);
     s.text(&format!(
-        "      {}{}{}  {}지킴이",
+        "      {}{}{}  {}{}지킴이",
         pad("종류", 6),
         pad("대상", lw),
         lpad("크기", 6),
+        pad("나이", 7),
         pad("신뢰도", 13)
     ));
     let cur = m.cursor[0];
     let (from, to) = list_window(cur, m.rows.len(), list_h);
     for (i, r) in m.rows.iter().enumerate().take(to).skip(from) {
-        let line = finding_row(r, i == cur, m.selected.contains(&r.finding_id), s.w);
+        let line = finding_row(r, i == cur, m.selected.contains(&r.finding_id), s.w, now);
         let st = if i == cur {
             cursor_style()
         } else {
@@ -379,7 +408,7 @@ fn findings_body(s: &mut Screen, m: &Model, body_h: usize) {
     s.fill_to(start + (list_h - (to - from)));
     if let Some(r) = m.rows.get(cur) {
         s.section(&format!("자세히: {}", r.label));
-        wrap_pairs(s, &r.detail, dh);
+        wrap_pairs(s, &finding_detail(r, now), dh);
     }
 }
 
@@ -424,6 +453,13 @@ fn ports_body(s: &mut Screen, m: &Model, body_h: usize) {
         let mut out = Vec::new();
         for d in &p.detail {
             out.extend(fmt::wrap(d, s.w, "", ""));
+        }
+        if let Some(l) = &m.latest {
+            let age = l
+                .snapshot
+                .taken_at_unix_ms
+                .saturating_sub(p.target.start_time_unix_ms);
+            out.push(format!("{}째 실행 중", fmt::duration(age)));
         }
         for l in out.into_iter().take(dh) {
             s.text(&l);

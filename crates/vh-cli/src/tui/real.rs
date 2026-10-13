@@ -3,13 +3,13 @@
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::mpsc::TryRecvError;
 use std::time::Duration;
 
 use crossterm::event::Event;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use vh_guard::{GuardCommand, GuardHandle, GuardUpdate, RealGuardBackend};
+use vh_guard::{GuardCommand, GuardHandle, GuardUpdate, RealGuardBackend, UpdateReceiver};
 use vh_model::{AutoLevel, GuardPolicy, VhConfig, display_path};
 
 use super::link::{Cmd, GuardLink, ManualResult, RecvState, ShutdownSummary, Update};
@@ -20,7 +20,7 @@ use crate::app::TuiOpts;
 
 struct RealLink {
     handle: GuardHandle,
-    rx: Receiver<GuardUpdate>,
+    rx: UpdateReceiver,
 }
 
 fn to_guard(c: Cmd) -> GuardCommand {
