@@ -49,7 +49,7 @@ pub fn ladder(a: &PlannedAction) -> String {
     parts.join(" → ")
 }
 
-fn item_label(lk: &Lookup<'_>, a: &PlannedAction) -> String {
+pub(crate) fn item_label(lk: &Lookup<'_>, a: &PlannedAction) -> String {
     let base = lk.label(a.target);
     if a.include_descendants && a.descendant_count > 0 {
         format!("{base} (자식 {}개 포함)", a.descendant_count)
@@ -210,7 +210,7 @@ pub fn kill_preview(s: &Snapshot, r: &Report, plan: &ActionPlan, t: Target, colo
     o.finish()
 }
 
-fn state_ko(st: FinalState) -> &'static str {
+pub(crate) fn state_ko(st: FinalState) -> &'static str {
     match st {
         FinalState::Exited => "종료됨",
         FinalState::StillAlive => "아직 살아 있음",
@@ -221,7 +221,7 @@ fn state_ko(st: FinalState) -> &'static str {
     }
 }
 
-fn how(o: &ActionOutcome) -> String {
+pub(crate) fn how(o: &ActionOutcome) -> String {
     match o.final_state {
         FinalState::Exited => {
             let killed = o.steps.iter().any(|s| s.step == Step::Kill && s.ok);

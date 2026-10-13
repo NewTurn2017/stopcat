@@ -105,3 +105,63 @@ fn confidence_defaults() {
         (Confidence::Confirmed, Basis::Explicit)
     );
 }
+
+#[test]
+fn route_table() {
+    use vh_cli::app::{Route, TuiOpts, route};
+    let a = |xs: &[&str]| {
+        let mut v = vec!["vh".to_string()];
+        v.extend(xs.iter().map(|s| s.to_string()));
+        v
+    };
+    let term = Some("xterm-ghostty");
+    let tui = Route::Tui(TuiOpts { no_color: false });
+    assert_eq!(route(&a(&[]), true, true, term, false), tui);
+    assert_eq!(
+        route(&a(&["--no-color"]), true, true, term, false),
+        Route::Tui(TuiOpts { no_color: true })
+    );
+    assert_eq!(
+        route(&a(&[]), true, true, term, true),
+        Route::Tui(TuiOpts { no_color: true })
+    );
+    assert_eq!(route(&a(&["--no-cpu"]), true, true, term, false), tui);
+    assert_eq!(route(&a(&[]), false, true, term, false), Route::Cli);
+    assert_eq!(route(&a(&[]), true, false, term, false), Route::Cli);
+    for args in [
+        &["--json"][..],
+        &["--plain"],
+        &["status"],
+        &["ports"],
+        &["why", ":5000"],
+        &["--help"],
+        &["--bogus"],
+    ] {
+        assert_eq!(
+            route(&a(args), true, true, term, false),
+            Route::Cli,
+            "{args:?}"
+        );
+    }
+    assert_eq!(route(&a(&[]), true, true, Some("dumb"), false), Route::Cli);
+    assert_eq!(route(&a(&[]), true, true, None, false), Route::Cli);
+    assert_eq!(route(&a(&[]), true, true, Some(""), false), Route::Cli);
+}
+
+#[test]
+fn plain_is_w1_status_and_help_starts_with_vh_only() {
+    let be = Synth::new();
+    let plain = run(&be, &["--plain"], true, "");
+    let status = run(&be, &[], true, "");
+    assert_eq!(plain.code, 0);
+    assert_eq!(plain.out, status.out);
+    let help = run(&be, &["--help"], false, "");
+    assert!(
+        help.out
+            .starts_with("vh 만 치면 됩니다. 화면에서 방향키로 고르고 Enter로 정리해요."),
+        "{}",
+        help.out
+    );
+    assert!(help.out.contains("스크립트·AI용 명령"));
+    assert!(help.out.contains("--plain"));
+}

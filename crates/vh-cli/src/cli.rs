@@ -6,14 +6,17 @@ use vh_model::Confidence;
 
 const HELP_TEMPLATE: &str = "{about}\n\n사용법: {usage}\n\n{all-args}";
 
+/// 맨 위 도움말(`vh --help`)만 쓰는 틀: 첫 줄에 화면 사용법을 먼저 알린다.
+const TOP_HELP_TEMPLATE: &str = "vh 만 치면 됩니다. 화면에서 방향키로 고르고 Enter로 정리해요.\n\n{about}\n\n사용법: {usage}\n\n{all-args}";
+
 #[derive(Debug, Parser)]
 #[command(
     name = "vh",
     version,
     about = "vh(Vibe Health) — 맥을 프로젝트·AI 세션 단위로 보고, 끄기 전에 누가 왜 띄웠는지 설명해요",
     override_usage = "vh [명령] [옵션]",
-    help_template = HELP_TEMPLATE,
-    subcommand_help_heading = "명령",
+    help_template = TOP_HELP_TEMPLATE,
+    subcommand_help_heading = "스크립트·AI용 명령",
     subcommand_value_name = "명령",
     next_help_heading = "옵션",
     disable_help_flag = true,
@@ -38,6 +41,13 @@ pub struct Cli {
 pub struct GlobalOpts {
     #[arg(long, global = true, help = "사람용 화면 대신 JSON 한 줄로 출력")]
     pub json: bool,
+
+    #[arg(
+        long,
+        global = true,
+        help = "전체 화면 대신 맥 상태를 글자로 한 화면(스크립트·AI용)"
+    )]
+    pub plain: bool,
 
     #[arg(
         long,
@@ -82,7 +92,7 @@ impl MinConfidence {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// 맥 상태 한 화면(명령 없이 vh 만 쳐도 같음)
+    /// 맥 상태를 글자로 한 화면(= vh --plain)
     #[command(override_usage = "vh status [옵션]", help_template = HELP_TEMPLATE, next_help_heading = "옵션")]
     Status,
 

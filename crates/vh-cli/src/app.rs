@@ -166,6 +166,45 @@ impl From<std::io::Error> for CliError {
     }
 }
 
+/// `vh`를 전체 화면으로 띄울지, W1 글자·JSON 경로로 보낼지.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Route {
+    Tui(TuiOpts),
+    Cli,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TuiOpts {
+    pub no_color: bool,
+}
+
+/// stdin·stdout이 모두 터미널이고, TERM이 화면 제어를 할 수 있고(`dumb`·없음 제외),
+/// 하위 명령·`--json`·`--plain`이 없을 때만 전체 화면. 파싱 오류는 [`run`]이 W1처럼 알린다.
+pub fn route(
+    args: &[String],
+    stdin_tty: bool,
+    stdout_tty: bool,
+    term: Option<&str>,
+    no_color_env: bool,
+) -> Route {
+    if !stdin_tty || !stdout_tty {
+        return Route::Cli;
+    }
+    match term {
+        Some(t) if !t.is_empty() && t != "dumb" => {}
+        _ => return Route::Cli,
+    }
+    let Ok(c) = cli::parse(args) else {
+        return Route::Cli;
+    };
+    if c.command.is_some() || c.global.json || c.global.plain {
+        return Route::Cli;
+    }
+    Route::Tui(TuiOpts {
+        no_color: c.global.no_color || no_color_env,
+    })
+}
+
 /// 명령줄 전체를 실행하고 종료 코드를 돌려준다.
 pub fn run(args: &[String], io: &mut Io<'_>, be: &dyn Backend) -> i32 {
     let json_hint = args.iter().skip(1).any(|a| a == "--json");

@@ -9,7 +9,7 @@ use crate::fmt::{self, WIDTH};
 const MAX_LINES_PER_BUCKET: usize = 3;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Bucket {
+pub(crate) enum Bucket {
     Watch,
     Orphan,
     Leftover,
@@ -17,7 +17,7 @@ enum Bucket {
     Conflict,
 }
 
-fn bucket(f: &Finding, target_kind: Option<Kind>) -> Option<Bucket> {
+pub(crate) fn bucket(f: &Finding, target_kind: Option<Kind>) -> Option<Bucket> {
     use FindingKind::*;
     let leftover_kind = matches!(
         target_kind,

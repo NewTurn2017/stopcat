@@ -1,4 +1,4 @@
-//! e2e 안전 잠금: `VH_E2E_ALLOW_PIDS`(쉼표 구분 pid)가 있으면 목록 밖 pid에는 신호·demote를
+//! e2e 안전 잠금: `VH_E2E_ALLOW_PIDS`(쉼표 구분 pid)가 있으면 목록 밖 pid에는 신호·demote·undemote를
 //! 보내지 않고 EPERM으로 거부한다. 값이 비었거나 숫자가 없으면 모두 거부(닫힌 쪽으로 실패).
 
 use std::cell::RefCell;
@@ -63,6 +63,13 @@ impl Signaler for AllowListSignaler<'_> {
         }
         self.inner.demote(pid)
     }
+
+    fn undemote(&self, pid: i32) -> Result<(), i32> {
+        if !self.permit(pid, "우선순위 되돌리기") {
+            return Err(EPERM);
+        }
+        self.inner.undemote(pid)
+    }
 }
 
 #[cfg(test)]
@@ -90,6 +97,20 @@ mod tests {
         assert_eq!(*fake.sent.borrow(), vec![(4242, TERM)]);
         assert_eq!(*fake.demoted.borrow(), vec![4242]);
         assert_eq!(*g.blocked.borrow(), vec![777, 777]);
+    }
+
+    #[test]
+    fn undemote_outside_list_is_refused() {
+        let fake = FakeSignaler::default();
+        let g = AllowListSignaler::new(&fake, BTreeSet::from([4242]), false);
+        assert_eq!(g.undemote(777), Err(EPERM));
+        assert!(fake.undemoted.borrow().is_empty());
+        assert_eq!(g.undemote(4242), Ok(()));
+        assert_eq!(*fake.undemoted.borrow(), vec![4242]);
+        assert_eq!(*g.blocked.borrow(), vec![777]);
+        let closed = AllowListSignaler::new(&fake, parse_allow(""), false);
+        assert_eq!(closed.undemote(4242), Err(EPERM));
+        assert_eq!(fake.undemoted.borrow().len(), 1);
     }
 
     #[test]

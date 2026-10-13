@@ -56,6 +56,18 @@ pub fn secs(ms: u32) -> String {
     }
 }
 
+/// 유닉스 밀리초 → 이 맥의 지역 시각 "23:41:05".
+pub fn hhmmss(unix_ms: u64) -> String {
+    let secs = (unix_ms / 1000) as libc::time_t;
+    // SAFETY: localtime_r은 넘긴 두 포인터만 읽고 쓴다. tm은 이 함수의 지역 변수다.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    let ok = unsafe { !libc::localtime_r(&secs, &mut tm).is_null() };
+    if !ok {
+        return "--:--:--".to_string();
+    }
+    format!("{:02}:{:02}:{:02}", tm.tm_hour, tm.tm_min, tm.tm_sec)
+}
+
 /// 글자 한 개의 표시 폭. 한글·한자·가나·전각은 2칸, 제어 문자는 0칸, 그 밖 1칸.
 pub fn char_width(c: char) -> usize {
     let u = c as u32;
