@@ -1,6 +1,9 @@
 //! KERN_PROCARGS2 읽기와 해석.
 //!
-//! 형식: [i32 argc][exec_path\0][\0 패딩…][argv × argc, 각 \0][env 문자열…][\0][apple 문자열…].
+//! 형식: [i32 argc][exec_path\0][\0 패딩][argv × argc, 각 \0][env 문자열…][\0][apple 문자열…].
+//! 패딩은 문자열 영역(오프셋 4)부터 센 exec_path 길이(NUL 포함)를 8바이트 경계로 맞추는 만큼이다
+//! (이 맥 자기 프로세스 1,581개 전부에서 확인). NUL을 모두 건너뛰면 빈 argv[0]이 사라지고
+//! env 첫 문자열이 argv로 밀려 들어오므로, 정확히 패딩만큼만 건너뛴다.
 //! env는 `ENV_ALLOWLIST` 키만 값과 함께 남긴다. 나머지 키의 값은 문자열로 만들지 않는다.
 
 use std::collections::BTreeMap;
@@ -87,6 +90,11 @@ fn env_key(entry: &[u8]) -> Option<(&[u8], &[u8])> {
     Some((key, &entry[eq + 1..]))
 }
 
+/// exec_path(NUL 포함 `len` 바이트) 뒤 8바이트 정렬 패딩 길이.
+pub(crate) fn exec_path_padding(len: usize) -> usize {
+    (8 - len % 8) % 8
+}
+
 /// 순수 해석 함수. 패닉하지 않는다.
 pub(crate) fn parse(data: &[u8]) -> ParsedArgs {
     let mut out = ParsedArgs::default();
@@ -104,8 +112,11 @@ pub(crate) fn parse(data: &[u8]) -> ParsedArgs {
     if !terminated {
         return out;
     }
-    while data.get(pos) == Some(&0) {
-        pos += 1;
+    let pad = exec_path_padding(pos - 4);
+    match data.get(pos..pos + pad) {
+        Some(p) if p.iter().all(|&c| c == 0) => pos += pad,
+        // 배치가 예상과 다르면 argv 시작을 추측하지 않는다(env가 argv로 섞이는 것을 막는다).
+        _ => return out,
     }
     let mut complete = true;
     for _ in 0..argc {
@@ -161,17 +172,34 @@ mod tests {
         v
     }
 
+    /// 커널과 같은 배치: argc, exec_path\0, 8바이트 정렬 패딩, argv, 나머지.
+    fn layout(exec: &[u8], argv: &[&[u8]], rest: &[u8]) -> Vec<u8> {
+        let mut v = (argv.len() as i32).to_ne_bytes().to_vec();
+        v.extend_from_slice(exec);
+        v.push(0);
+        v.extend(std::iter::repeat_n(0u8, exec_path_padding(exec.len() + 1)));
+        for a in argv {
+            v.extend_from_slice(a);
+            v.push(0);
+        }
+        v.extend_from_slice(rest);
+        v
+    }
+
+    #[test]
+    fn exec_path_padding_aligns_to_8() {
+        assert_eq!(exec_path_padding(8), 0);
+        assert_eq!(exec_path_padding(7), 1);
+        assert_eq!(exec_path_padding(9), 7);
+        assert_eq!(exec_path_padding(23), 1);
+    }
+
     #[test]
     fn procargs_normal() {
-        let data = buf(
-            3,
-            &[
-                b"/opt/homebrew/bin/node\0\0\0\0",
-                b"node\0server.js\0--port\0",
-                b"CLAUDE_PID=4242\0HOME_LIKE=/Users/demo\0VH_TAG=shop\0OTHER_VAR=x\0",
-                b"\0",
-                b"executable_path=/opt/homebrew/bin/node\0ptr_munge=\0",
-            ],
+        let data = layout(
+            b"/opt/homebrew/bin/node",
+            &[b"node", b"server.js", b"--port"],
+            b"CLAUDE_PID=4242\0HOME_LIKE=/Users/demo\0VH_TAG=shop\0OTHER_VAR=x\0\0executable_path=/opt/homebrew/bin/node\0ptr_munge=\0",
         );
         let p = parse(&data);
         assert_eq!(p.argv, ["node", "server.js", "--port"]);
@@ -180,6 +208,53 @@ mod tests {
         let keys: Vec<&str> = p.env.keys().map(String::as_str).collect();
         assert_eq!(keys, ["CLAUDE_PID", "VH_TAG"]);
         assert_eq!(p.env["CLAUDE_PID"], "4242");
+    }
+
+    #[test]
+    fn procargs_empty_argv0_preserved() {
+        // exec_path 길이별로 패딩 0~7을 모두 확인한다. env 문자열이 argv로 밀려 들어오면 안 된다.
+        for n in 1..=8 {
+            let exec = format!("/bin/{}", "s".repeat(n));
+            let data = layout(
+                exec.as_bytes(),
+                &[b"", b"-c", b"", b"end"],
+                b"VH_TAG=a\0OTHER_VAR=b\0\0",
+            );
+            let p = parse(&data);
+            assert_eq!(p.argv, ["", "-c", "", "end"], "exec 길이 {}", exec.len());
+            assert!(p.argv_readable);
+            assert_eq!(p.env.len(), 1);
+            assert!(p.env_readable);
+        }
+    }
+
+    #[test]
+    fn procargs_zero_padding() {
+        let data = layout(b"/bin/sh", &[b"sh", b"-c"], b"VH_TAG=a\0");
+        assert_eq!(exec_path_padding(b"/bin/sh".len() + 1), 0);
+        assert_eq!(parse(&data).argv, ["sh", "-c"]);
+    }
+
+    #[test]
+    fn procargs_unexpected_padding_is_unreadable() {
+        // 패딩 자리(1바이트)에 NUL이 아닌 값이 있으면 argv 시작을 추측하지 않는다.
+        let data = buf(1, &[b"/bin/x\0", b"Zarg\0VH_TAG=a\0"]);
+        let p = parse(&data);
+        assert!(!p.argv_readable);
+        assert!(p.argv.is_empty() && p.env.is_empty());
+        // 패딩이 버퍼 끝을 넘는 경우.
+        assert!(!parse(&buf(1, &[b"/bin/x\0"])).argv_readable);
+    }
+
+    #[test]
+    fn procargs_control_chars_and_utf8_kept_raw() {
+        let data = layout(
+            b"/bin/x",
+            &["a\tb\nc".as_bytes(), "한글 인자".as_bytes()],
+            b"",
+        );
+        let p = parse(&data);
+        assert_eq!(p.argv, ["a\tb\nc", "한글 인자"]);
     }
 
     #[test]

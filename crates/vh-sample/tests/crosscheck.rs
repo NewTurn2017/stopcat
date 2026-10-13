@@ -294,6 +294,48 @@ fn xorshift(state: &mut u64) -> u64 {
     x
 }
 
+fn run_bytes(cmd: &str, args: &[&str]) -> Vec<u8> {
+    Command::new(cmd)
+        .args(args)
+        .output()
+        .map(|o| o.stdout)
+        .unwrap_or_default()
+}
+
+/// macOS `ps -o command`의 표시 규칙(이 맥에서 합성 인자로 확인): 탭 → `\011`, 개행 → `\012`,
+/// 그 밖의 제어 문자 → `^X`, DEL → `^?`. 역슬래시와 UTF-8 바이트는 그대로.
+fn ps_vis(b: &[u8]) -> Vec<u8> {
+    let mut o = Vec::with_capacity(b.len());
+    for &c in b {
+        match c {
+            b'\t' => o.extend_from_slice(b"\\011"),
+            b'\n' => o.extend_from_slice(b"\\012"),
+            0..=0x1f => o.extend_from_slice(&[b'^', c + 0x40]),
+            0x7f => o.extend_from_slice(b"^?"),
+            _ => o.push(c),
+        }
+    }
+    o
+}
+
+/// ps 출력 끝의 개행 하나만 뗀다(다른 공백은 그대로 비교한다).
+fn strip_nl(mut v: Vec<u8>) -> Vec<u8> {
+    if v.last() == Some(&b'\n') {
+        v.pop();
+    }
+    v
+}
+
+#[test]
+fn ps_vis_rules() {
+    assert_eq!(
+        ps_vis(b"a\tb\nc\rd\x01e\x1bf\x7fg\\h"),
+        b"a\\011b\\012c^Md^Ae^[f^?g\\h".to_vec()
+    );
+    assert_eq!(ps_vis("한글 ".as_bytes()), "한글 ".as_bytes().to_vec());
+    assert_eq!(strip_nl(b"x  \n".to_vec()), b"x  ".to_vec());
+}
+
 #[test]
 #[ignore]
 fn crosscheck_4_cwd_argv() {
@@ -314,7 +356,9 @@ fn crosscheck_4_cwd_argv() {
     let mut state = seed;
     let mut picked = HashSet::new();
     let mut rows = Vec::new();
-    let mut vanished = 0usize;
+    let mut unstable = 0usize;
+    let mut excluded_empty_argv0 = 0usize;
+    let mut excluded_non_utf8 = 0usize;
     let mut tries = 0usize;
     while rows.len() < 20 && tries < cands.len() * 4 && !cands.is_empty() {
         tries += 1;
@@ -322,21 +366,34 @@ fn crosscheck_4_cwd_argv() {
         if !picked.insert(p.pid) {
             continue;
         }
+        // ps가 빈 argv[0]을 건너뛰고 env 문자열을 붙여 보여 주는 것을 확인했다(ps 쪽 한계). 비교에서 빼고 센다.
+        if p.argv.first().is_some_and(|a| a.is_empty()) {
+            excluded_empty_argv0 += 1;
+            continue;
+        }
+        // vh argv는 계약상 String(손실 변환)이라 잘못된 UTF-8은 바이트 비교가 불가능하다. 빼고 센다.
+        if p.argv.iter().any(|a| a.contains('\u{FFFD}')) {
+            excluded_non_utf8 += 1;
+            continue;
+        }
         let pid = p.pid.to_string();
-        let ps_cmd = run("/bin/ps", &["-ww", "-o", "command=", "-p", &pid]);
-        let lsof = run("/usr/sbin/lsof", &["-a", "-d", "cwd", "-p", &pid, "-Fn"]);
-        let lsof_cwd = lsof
+        let ps1 = run_bytes("/bin/ps", &["-ww", "-o", "command=", "-p", &pid]);
+        let cwd1 = run("/usr/sbin/lsof", &["-a", "-d", "cwd", "-p", &pid, "-Fn"]);
+        let ps2 = run_bytes("/bin/ps", &["-ww", "-o", "command=", "-p", &pid]);
+        let cwd2 = run("/usr/sbin/lsof", &["-a", "-d", "cwd", "-p", &pid, "-Fn"]);
+        let lsof_cwd = cwd1
             .lines()
             .find_map(|l| l.strip_prefix('n'))
             .map(str::to_string);
-        if ps_cmd.trim().is_empty() || lsof_cwd.is_none() {
-            vanished += 1;
+        if ps1.is_empty() || ps1 != ps2 || cwd1 != cwd2 || lsof_cwd.is_none() {
+            unstable += 1;
             continue;
         }
-        let ours = p.argv.join(" ");
-        let argv_match = ours.trim_end() == ps_cmd.trim_end_matches('\n').trim_end();
+        let expected = ps_vis(p.argv.join(" ").as_bytes());
+        let ps_out = strip_nl(ps1);
+        let argv_match = expected == ps_out;
         let cwd_match = p.cwd.as_deref() == lsof_cwd.as_deref();
-        rows.push(json!({"pid": p.pid, "cwd_match": cwd_match, "argv_match": argv_match, "vh_argv_len": ours.trim_end().len(), "ps_len": ps_cmd.trim_end().len()}));
+        rows.push(json!({"pid": p.pid, "cwd_match": cwd_match, "argv_match": argv_match, "vh_bytes": expected.len(), "ps_bytes": ps_out.len()}));
     }
     let cwd_ok = rows.iter().filter(|r| r["cwd_match"] == true).count();
     let argv_ok = rows.iter().filter(|r| r["argv_match"] == true).count();
@@ -345,9 +402,11 @@ fn crosscheck_4_cwd_argv() {
         "crosscheck_4_cwd_argv",
         pass,
         json!({
-            "criterion": "시드 고정 무작위 자기 프로세스 20개: cwd = lsof -a -d cwd -p, argv(공백 연결) = ps -ww -o command= (읽을 수 있는 것만)",
+            "criterion": "시드 고정 무작위 자기 프로세스 20개: cwd = lsof -a -d cwd -p (문자열 완전 일치), argv = ps -ww -o command= (vh argv를 공백으로 잇고 ps 표시 규칙을 적용한 바이트가 ps 출력(끝 개행 1개 제외)과 완전 일치). 같은 pid의 ps·lsof를 두 번 읽어 다르거나 그 사이 종료되면 unstable로 빼고 다른 프로세스를 뽑는다",
+            "ps_display_rule": "탭→\\011, 개행→\\012, 그 밖의 제어 문자→^X, DEL→^?, 역슬래시·UTF-8은 그대로",
             "seed": seed, "candidates": cands.len(), "compared": rows.len(), "cwd_match": cwd_ok, "argv_match": argv_ok,
-            "vanished_or_unreadable_skipped": vanished, "rows": rows,
+            "unstable_skipped": unstable, "excluded_empty_argv0": excluded_empty_argv0, "excluded_non_utf8": excluded_non_utf8,
+            "unit": "bytes", "rows": rows,
         }),
     );
     assert!(pass, "비교 {} · cwd {cwd_ok} · argv {argv_ok}", rows.len());
