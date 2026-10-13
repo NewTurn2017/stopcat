@@ -174,10 +174,10 @@ pub fn kill_preview(s: &Snapshot, r: &Report, plan: &ActionPlan, t: Target, colo
     }
     for a in &plan.items {
         let mut head = format!("  {} · pid {}", lk.label(a.target), a.target.pid);
-        if let Some(p) = lk.proc(a.target) {
-            if let Some(fp) = p.footprint_bytes {
-                head.push_str(&format!(" · {}", fmt::bytes(fp)));
-            }
+        if let Some(p) = lk.proc(a.target)
+            && let Some(fp) = p.footprint_bytes
+        {
+            head.push_str(&format!(" · {}", fmt::bytes(fp)));
         }
         if let Some(age) = lk.age(a.target) {
             head.push_str(&format!(" · {age}째"));

@@ -32,11 +32,11 @@ pub(crate) fn parse(text: &str) -> (Vec<i32>, BTreeMap<i32, String>) {
         else {
             continue;
         };
-        if let Ok(pid) = pid.trim().parse::<i32>() {
-            if pid > 0 {
-                pids.push(pid);
-                labels.insert(pid, label.trim().to_string());
-            }
+        if let Ok(pid) = pid.trim().parse::<i32>()
+            && pid > 0
+        {
+            pids.push(pid);
+            labels.insert(pid, label.trim().to_string());
         }
     }
     pids.sort_unstable();

@@ -389,13 +389,16 @@ pub(crate) fn process_findings(c: &Ctx, ports: &Ports) -> Vec<Finding> {
             }
         }
 
-        if p.ppid == 1 && !jobs.contains(&p.pid) && !c.excluded(i) && !c.daemon_by_design(i) {
-            if let Some(f) = orphan_finding(c, ports, i) {
-                let terminating = matches!(f.suggestion, Suggestion::Terminate { .. });
-                out.push(f);
-                if terminating {
-                    cover(c, &mut covered, i);
-                }
+        if p.ppid == 1
+            && !jobs.contains(&p.pid)
+            && !c.excluded(i)
+            && !c.daemon_by_design(i)
+            && let Some(f) = orphan_finding(c, ports, i)
+        {
+            let terminating = matches!(f.suggestion, Suggestion::Terminate { .. });
+            out.push(f);
+            if terminating {
+                cover(c, &mut covered, i);
             }
         }
     }

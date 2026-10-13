@@ -49,7 +49,7 @@ pub fn duration(ms: u64) -> String {
 
 /// 밀리초 → "3초", "1.5초".
 pub fn secs(ms: u32) -> String {
-    if ms % 1000 == 0 {
+    if ms.is_multiple_of(1000) {
         format!("{}초", ms / 1000)
     } else {
         format!("{:.1}초", f64::from(ms) / 1000.0)

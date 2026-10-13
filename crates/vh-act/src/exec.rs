@@ -511,16 +511,15 @@ impl<'e, 'a> Run<'e, 'a> {
         let grace = u64::from(a.grace_ms).min(deadline.saturating_sub(self.now()));
         self.wait_exit(&mut vs, grace);
 
-        if a.include_descendants {
-            if let Ok(mut late) = self.collect(&mut it, &vs) {
-                if !late.is_empty() {
-                    sort_bottom_up(&mut late);
-                    let _ = self.term_all(&mut it, &mut late, false);
-                    self.wait_exit(&mut late, u64::from(a.grace_ms).min(LATE_CHILD_GRACE_MS));
-                    vs.extend(late);
-                    sort_bottom_up(&mut vs);
-                }
-            }
+        if a.include_descendants
+            && let Ok(mut late) = self.collect(&mut it, &vs)
+            && !late.is_empty()
+        {
+            sort_bottom_up(&mut late);
+            let _ = self.term_all(&mut it, &mut late, false);
+            self.wait_exit(&mut late, u64::from(a.grace_ms).min(LATE_CHILD_GRACE_MS));
+            vs.extend(late);
+            sort_bottom_up(&mut vs);
         }
 
         if a.steps.contains(&Step::Kill) {

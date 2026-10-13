@@ -280,6 +280,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "vh-guard"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "vh-act",
+ "vh-analyze",
+ "vh-model",
+ "vh-sample",
+]
+
+[[package]]
 name = "vh-model"
 version = "0.1.0"
 dependencies = [

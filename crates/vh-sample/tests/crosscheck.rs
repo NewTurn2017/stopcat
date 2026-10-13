@@ -92,10 +92,10 @@ fn crosscheck_1_pids() {
             ps_changed += 1;
             continue;
         }
-        if let Some(&(ppid, pgid)) = vh.get(pid) {
-            if (ppid, pgid) != (b.0, b.1) {
-                mismatch.push(json!({"pid": pid, "vh": [ppid, pgid], "ps": [b.0, b.1]}));
-            }
+        if let Some(&(ppid, pgid)) = vh.get(pid)
+            && (ppid, pgid) != (b.0, b.1)
+        {
+            mismatch.push(json!({"pid": pid, "vh": [ppid, pgid], "ps": [b.0, b.1]}));
         }
     }
     let missing: Vec<i32> = stable
@@ -228,10 +228,10 @@ fn lsof_listen(uid: u32) -> HashSet<(i32, u16)> {
     for line in out.lines() {
         if let Some(p) = line.strip_prefix('p') {
             pid = p.parse().unwrap_or(0);
-        } else if let Some(n) = line.strip_prefix('n') {
-            if let Some(port) = n.rsplit(':').next().and_then(|p| p.parse::<u16>().ok()) {
-                set.insert((pid, port));
-            }
+        } else if let Some(n) = line.strip_prefix('n')
+            && let Some(port) = n.rsplit(':').next().and_then(|p| p.parse::<u16>().ok())
+        {
+            set.insert((pid, port));
         }
     }
     set
