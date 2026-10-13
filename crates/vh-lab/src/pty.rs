@@ -119,6 +119,23 @@ pub fn flags_equal(a: &libc::termios, b: &libc::termios) -> bool {
         && (a.c_lflag & mask) == (b.c_lflag & mask)
 }
 
+/// `stty -g` 두 줄이 같은지. lflag의 PENDIN(커널이 켜는 '입력 다시 쓰기 대기' 상태 비트)은
+/// [`flags_equal`]과 같이 뺀다 — less가 끝날 때 남은 입력으로 켜져 stty만 다르게 보였다.
+pub fn stty_equal(a: &str, b: &str) -> bool {
+    let norm = |s: &str| -> Vec<String> {
+        s.split(':')
+            .map(|f| match f.strip_prefix("lflag=") {
+                Some(h) => match libc::tcflag_t::from_str_radix(h, 16) {
+                    Ok(v) => format!("lflag={:x}", v & !libc::PENDIN),
+                    Err(_) => f.to_string(),
+                },
+                None => f.to_string(),
+            })
+            .collect()
+    };
+    norm(a) == norm(b)
+}
+
 fn stty_g() -> Option<String> {
     let o = Command::new("/bin/stty")
         .arg("-g")
@@ -147,6 +164,8 @@ pub struct ShimReport {
     pub stty_before: Option<String>,
     pub stty_after: Option<String>,
     pub stty_restored: Option<bool>,
+    /// PENDIN까지 포함한 글자 그대로 비교.
+    pub stty_identical: Option<bool>,
     pub finished: bool,
 }
 
@@ -195,7 +214,8 @@ pub fn shim_main(args: &[String]) -> i32 {
     }
     r.stty_after = stty_g();
     if let (Some(b), Some(a)) = (&r.stty_before, &r.stty_after) {
-        r.stty_restored = Some(b == a);
+        r.stty_restored = Some(stty_equal(b, a));
+        r.stty_identical = Some(b == a);
     }
     r.finished = true;
     write_report(&report, &r);
@@ -425,5 +445,24 @@ impl Drop for PtyVh {
         self.kill_group();
         // SAFETY: slave_fd는 이 구조체만 닫는다.
         unsafe { libc::close(self.slave_fd) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stty_compare_ignores_pendin_only() {
+        let before = "gfmt1:cflag=4b00:iflag=2b02:lflag=5cb:oflag=3:min=1";
+        let pendin = "gfmt1:cflag=4b00:iflag=2b02:lflag=200005cb:oflag=3:min=1";
+        let raw = "gfmt1:cflag=4b00:iflag=2b02:lflag=4c1:oflag=3:min=1";
+        assert_eq!(libc::PENDIN, 0x2000_0000);
+        assert!(stty_equal(before, pendin));
+        assert!(!stty_equal(before, raw));
+        assert!(!stty_equal(
+            before,
+            "gfmt1:cflag=4b00:iflag=2b02:lflag=5cb:oflag=7:min=1"
+        ));
     }
 }
