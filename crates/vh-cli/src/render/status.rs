@@ -45,34 +45,54 @@ fn hint(f: &Finding) -> &'static str {
     }
 }
 
-/// `"{tag}  a · b · c"`를 80칸 안에 맞추고, 못 넣은 개수는 " 외 N건"으로 붙인다.
+/// `"{tag}  a · b ×2 · c"`를 80칸 안에 맞춘다. 짧은 이름이 같은 발견은 "×N"으로 묶고,
+/// 안 들어가는 묶음은 건너뛰고 뒤의 짧은 것을 넣으며, 못 넣은 발견 수는 " 외 N건"으로 붙인다.
 fn joined(o: &mut Out, tag: &str, c: Color, items: &[&Finding]) {
-    if items.is_empty() {
+    let mut groups: Vec<(&str, usize)> = Vec::new();
+    for f in items {
+        match groups.iter_mut().find(|(name, _)| *name == f.short_ko) {
+            Some(g) => g.1 += 1,
+            None => groups.push((&f.short_ko, 1)),
+        }
+    }
+    if groups.is_empty() {
         return;
     }
-    let mut shown: Vec<&str> = Vec::new();
-    for (i, f) in items.iter().enumerate() {
-        let rest = items.len() - i - 1;
-        let mut trial = shown.clone();
-        trial.push(&f.short_ko);
-        let suffix = if rest > 0 {
-            format!(" 외 {rest}건")
+    let label = |(name, n): &(&str, usize)| {
+        if *n > 1 {
+            format!("{name} ×{n}")
+        } else {
+            name.to_string()
+        }
+    };
+    let suffix = |hidden: usize| {
+        if hidden > 0 {
+            format!(" 외 {hidden}건")
         } else {
             String::new()
-        };
-        let line = format!("{tag}  {}{suffix}", trial.join(" · "));
+        }
+    };
+    let mut shown: Vec<String> = Vec::new();
+    let mut covered = 0usize;
+    for g in &groups {
+        let mut trial = shown.clone();
+        trial.push(label(g));
+        let line = format!(
+            "{tag}  {}{}",
+            trial.join(" · "),
+            suffix(items.len() - covered - g.1)
+        );
         if fmt::width(&line) > WIDTH && !shown.is_empty() {
-            break;
+            continue;
         }
         shown = trial;
+        covered += g.1;
     }
-    let hidden = items.len() - shown.len();
-    let suffix = if hidden > 0 {
-        format!(" 외 {hidden}건")
-    } else {
-        String::new()
-    };
-    o.tagged(tag, c, &format!("{}{suffix}", shown.join(" · ")));
+    o.tagged(
+        tag,
+        c,
+        &format!("{}{}", shown.join(" · "), suffix(items.len() - covered)),
+    );
 }
 
 pub fn render(s: &Snapshot, r: &Report, color: bool) -> String {
@@ -155,7 +175,7 @@ pub fn render(s: &Snapshot, r: &Report, color: bool) -> String {
     let unread = s
         .collection_errors
         .iter()
-        .filter(|e| !e.message.contains("(정상)"))
+        .filter(|e| e.pid.is_none() && !e.message.contains("(정상)"))
         .count();
     if unread > 0 {
         o.line(&format!(

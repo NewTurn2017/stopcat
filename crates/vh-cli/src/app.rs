@@ -3,13 +3,14 @@
 use std::io::{BufRead, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use vh_act::{DirectTarget, ExecEnv, Policy, RealProber, RealSignaler, Selection};
+use vh_act::{DirectTarget, ExecEnv, Policy, RealProber, RealSignaler, Selection, Signaler};
 use vh_model::{ActionPlan, Confidence, Explanation, ProcRef, Report, Snapshot};
 use vh_sample::CollectOptions;
 
 use crate::cli::{self, Cli, Command, GlobalOpts, ParseFailure};
 use crate::color;
 use crate::flow::{self, Executed};
+use crate::guard;
 use crate::json;
 use crate::render;
 use crate::target::{self, TARGET_HINT, Target};
@@ -70,8 +71,20 @@ impl Backend for RealBackend {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis())
             .unwrap_or(0);
+        let allow = std::env::var(guard::ENV)
+            .ok()
+            .map(|v| guard::parse_allow(&v));
+        let guarded;
+        let signaler: &dyn Signaler = match &allow {
+            Some(pids) => {
+                eprintln!("vh: {} 잠금 사용 중 — 허용 pid {pids:?}", guard::ENV);
+                guarded = guard::AllowListSignaler::new(&RealSignaler, pids.clone(), true);
+                &guarded
+            }
+            None => &RealSignaler,
+        };
         let env = ExecEnv {
-            signaler: &RealSignaler,
+            signaler,
             prober: &RealProber,
             state_dir: state_dir.clone(),
             snapshot: s,

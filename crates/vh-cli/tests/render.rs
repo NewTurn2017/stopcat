@@ -520,3 +520,46 @@ fn color_only_when_enabled() {
     assert!(!vh_cli::color::enabled(false, false, false, false));
     assert!(!vh_cli::color::enabled(false, false, true, true));
 }
+
+#[test]
+fn same_short_names_collapse_and_pid_errors_are_quiet() {
+    let mut s = snapshot();
+    let mut rep = report(&s);
+    let chrome = rep
+        .findings
+        .iter()
+        .find(|f| f.kind == FindingKind::HeadlessBrowserLeftover)
+        .unwrap()
+        .clone();
+    let mut twin = chrome.clone();
+    twin.id.push_str(":twin");
+    rep.findings.push(twin);
+    s.collection_errors.push(CollectionError {
+        pid: Some(40200),
+        stage: "pidpath".into(),
+        errno: Some(3),
+        message: "proc_pidpath 실패".into(),
+    });
+    let text = status::render(&s, &rep, false);
+    assert!(text.contains("headless Chrome 7시간 ×2"), "{text}");
+    assert!(!text.contains("읽지 못했어요"), "{text}");
+    s.collection_errors.push(CollectionError {
+        pid: None,
+        stage: "launchd".into(),
+        errno: None,
+        message: "launchctl list 실패".into(),
+    });
+    let text = status::render(&s, &rep, false);
+    assert!(text.contains("일부 정보를 읽지 못했어요(1건)"), "{text}");
+}
+
+#[test]
+fn why_port_shows_only_that_port() {
+    let s = snapshot();
+    let rep = report(&s);
+    let (_, mut e) = explanations(&s, &rep);
+    e.listeners.push(s.listeners[0].clone());
+    let text = why::render(&s, &rep, Target::Port(4723), &[e], false);
+    assert!(text.contains("모든 네트워크(*:4723) —"), "{text}");
+    assert!(!text.contains("3000"), "{text}");
+}

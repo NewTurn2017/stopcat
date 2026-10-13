@@ -5,6 +5,7 @@ pub mod cli;
 pub mod color;
 pub mod flow;
 pub mod fmt;
+pub mod guard;
 pub mod json;
 pub mod render;
 pub mod target;

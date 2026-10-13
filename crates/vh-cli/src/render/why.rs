@@ -34,10 +34,17 @@ fn one(o: &mut Out, lk: &Lookup<'_>, q: Target, e: &Explanation) {
     };
     o.colored(&head, Color::Bold);
 
-    if !e.listeners.is_empty() {
-        let refs: Vec<_> = e.listeners.iter().collect();
+    let refs: Vec<_> = e
+        .listeners
+        .iter()
+        .filter(|l| match q {
+            Target::Port(p) => l.port == p,
+            Target::Pid(_) => true,
+        })
+        .collect();
+    if !refs.is_empty() {
         let mut addrs: Vec<String> = Vec::new();
-        for l in &e.listeners {
+        for l in &refs {
             let a = if l.all_interfaces {
                 format!("*:{}", l.port)
             } else {
