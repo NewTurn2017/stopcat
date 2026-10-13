@@ -311,15 +311,23 @@ pub(crate) fn process_findings(c: &Ctx, ports: &Ports) -> Vec<Finding> {
             && c.parent[i].is_some()
             && kind != Kind::AgentCli
             && !c.excluded(i)
+            && !c.daemon_by_design(i)
             && age_ms >= MIN_10
             && let Some(dead) = owner.dead
         {
-            let parent_shares = c.parent[i].is_some_and(|j| {
-                c.owner[j].dead.is_some()
+            let mut ancestor_shares = false;
+            let mut up = c.parent[i];
+            while let Some(j) = up {
+                if c.owner[j].dead.is_some()
                     && c.owner[j].pid == owner.pid
                     && c.owner[j].source == owner.source
-            });
-            if !parent_shares {
+                {
+                    ancestor_shares = true;
+                    break;
+                }
+                up = c.parent[j];
+            }
+            if !ancestor_shares {
                 let mut conf = if dead == DeadWhy::TmpSessionGone {
                     Confidence::Likely
                 } else {
@@ -381,7 +389,7 @@ pub(crate) fn process_findings(c: &Ctx, ports: &Ports) -> Vec<Finding> {
             }
         }
 
-        if p.ppid == 1 && !jobs.contains(&p.pid) && !c.excluded(i) {
+        if p.ppid == 1 && !jobs.contains(&p.pid) && !c.excluded(i) && !c.daemon_by_design(i) {
             if let Some(f) = orphan_finding(c, ports, i) {
                 let terminating = matches!(f.suggestion, Suggestion::Terminate { .. });
                 out.push(f);
@@ -438,12 +446,15 @@ fn orphan_finding(c: &Ctx, ports: &Ports, i: usize) -> Option<Finding> {
     let (mut conf, why_review): (Confidence, &str);
     if sig == "agent_claude_daemon" {
         let transient = argv_flag_value(&p.argv, "--origin") == Some("transient");
-        let spawner_dead = owner.source == Some("argv:spawned_by") && owner.dead.is_some();
+        let spawner_dead = owner.dead.is_some();
         if transient {
             reasons.push("transient_origin".into());
         }
         if spawner_dead {
             reasons.push("spawner_dead".into());
+            if let Some(sc) = owner.source_code() {
+                reasons.push(sc.into());
+            }
         }
         if transient && spawner_dead {
             conf = Confidence::Likely;
@@ -469,6 +480,9 @@ fn orphan_finding(c: &Ctx, ports: &Ports, i: usize) -> Option<Finding> {
                     reasons.push("agent_tmp_cwd".into());
                 }
                 reasons.push(d.code().into());
+                if let Some(sc) = owner.source_code() {
+                    reasons.push(sc.into());
+                }
             }
             reasons.push("age_ge_10m".into());
         } else if !service
@@ -707,20 +721,20 @@ fn duplicates(c: &Ctx, covered: &mut [bool]) -> Vec<Finding> {
             || !c.is_mine(i)
             || !c.alive(i)
             || c.excluded(i)
-            || matches!(kind, Kind::AgentCli | Kind::AgentHelper)
+            || matches!(
+                kind,
+                Kind::AgentCli | Kind::AgentHelper | Kind::LanguageServer
+            )
             || !p.argv_readable
             || p.argv.is_empty()
         {
             continue;
         }
-        let owner_key = if kind == Kind::McpServer {
-            match (c.owner[i].session, c.owner[i].pid) {
-                (Some(s), _) => format!("{}:{}", s.pid, s.start_time_unix_ms),
-                (None, Some(pid)) => pid.to_string(),
-                _ => continue,
-            }
-        } else {
-            String::new()
+        let owner_key = match (c.owner[i].session, c.owner[i].pid) {
+            (Some(s), _) => format!("{}:{}", s.pid, s.start_time_unix_ms),
+            (None, Some(pid)) => pid.to_string(),
+            _ if kind == Kind::McpServer => continue,
+            _ => String::new(),
         };
         let norm = normalize_argv(&c.feats[i].exe_base, &effective_argv(p));
         keys[i] = Some(format!(
@@ -776,7 +790,7 @@ fn duplicates(c: &Ctx, covered: &mut [bool]) -> Vec<Finding> {
         };
         let label = c.cls[keep].label.clone();
         let mut reasons: Vec<String> = vec!["same_cwd".into(), "same_argv_normalized".into()];
-        if mcp {
+        if mcp || c.owner[keep].pid.is_some() {
             reasons.push("same_owner_session".into());
         }
         if any_tty {

@@ -118,10 +118,22 @@ pub(crate) fn listeners(c: &Ctx) -> (Vec<ListenerView>, Vec<Finding>) {
         if !seen_exposed.insert((r.pid, r.start_time_unix_ms, l.port)) {
             continue;
         }
-        let conf = if matches!(kind, Kind::GuiApp | Kind::AppHelper) {
+        let job_label =
+            c.s.launchd_job_labels
+                .get(&r.pid)
+                .filter(|_| c.s.launchd_job_pids.contains(&r.pid));
+        let conf = if matches!(kind, Kind::GuiApp | Kind::AppHelper) || job_label.is_some() {
             Confidence::Possible
         } else {
             Confidence::Confirmed
+        };
+        let mut reasons = vec!["listens_all_ifaces".to_string()];
+        let service_note = match job_label {
+            Some(lbl) => {
+                reasons.push("launchd_service".into());
+                format!(" LaunchAgent 서비스({lbl})로 일부러 띄운 것이라 의도된 노출일 수 있어요.")
+            }
+            None => String::new(),
         };
         let name = match (kind, port_hint(l.port)) {
             (Kind::VirtualMachine, Some(h)) => format!("{h}({label})"),
@@ -139,11 +151,11 @@ pub(crate) fn listeners(c: &Ctx) -> (Vec<ListenerView>, Vec<Finding>) {
                 title: format!("{name} 외부 노출 {addr}"),
                 short: format!("{name} {addr}"),
                 detail: format!(
-                    "{} 개발용이면 127.0.0.1로만 띄우는 게 안전해요.{}",
+                    "{}{service_note} 개발용이면 127.0.0.1로만 띄우는 게 안전해요.{}",
                     exposure_text(c, j, l).unwrap_or_default(),
                     review_note("다른 기기 접속을 일부러 연 것일 수 있음", r.pid)
                 ),
-                reasons: vec!["listens_all_ifaces".into()],
+                reasons,
                 suggestion: Suggestion::Review,
             },
         ));

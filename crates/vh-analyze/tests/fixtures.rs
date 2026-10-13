@@ -48,8 +48,10 @@ fn launchagent_service_not_orphan() {
     let (_, r) = run("launchagent_service_not_orphan");
     assert!(of_kind(&r, FindingKind::Orphan).is_empty());
     let f = one(&r, FindingKind::ExposedListener, 5101);
-    assert_eq!(f.confidence, Confidence::Confirmed);
+    assert_eq!(f.confidence, Confidence::Possible);
     assert_eq!(f.suggestion, Suggestion::Review);
+    assert!(has_reason(f, "launchd_service"));
+    assert!(f.detail_ko.contains("com.demo.stt"));
     assert!(f.id.ends_with(":8004"));
     assert_eq!(r.findings.len(), 1, "{:#?}", r.findings);
 }
@@ -367,4 +369,87 @@ fn env_unreadable_is_not_guessed_dead() {
     assert_eq!(c.owner_session, None);
     assert_eq!(c.owner_alive, None);
     none_targets(&r, 1950);
+}
+
+#[test]
+fn omo_py_kernels_not_duplicate() {
+    let (_, r) = run("omo_py_kernels_not_duplicate");
+    for pid in [7001, 7201] {
+        let c = class(&r, pid);
+        assert_eq!(c.kind, Kind::AgentHelper);
+        assert_eq!(c.signature_id.as_deref(), Some("agent_omo_py_kernel"));
+        assert_eq!(c.owner_alive, Some(true));
+    }
+    assert!(
+        of_kind(&r, FindingKind::Duplicate).is_empty(),
+        "{:#?}",
+        r.findings
+    );
+}
+
+#[test]
+fn daemons_by_design_not_orphan() {
+    let (_, r) = run("daemons_by_design_not_orphan");
+    assert_eq!(
+        class(&r, 3600).signature_id.as_deref(),
+        Some("agent_omo_lsp_daemon")
+    );
+    assert_eq!(
+        class(&r, 3610).signature_id.as_deref(),
+        Some("android_adb_server")
+    );
+    assert_eq!(class(&r, 3620).signature_id.as_deref(), Some("ls_biome"));
+    assert!(
+        of_kind(&r, FindingKind::Orphan).is_empty(),
+        "{:#?}",
+        r.findings
+    );
+    assert!(of_kind(&r, FindingKind::HeadlessBrowserLeftover).is_empty());
+    assert!(of_kind(&r, FindingKind::LogicalOrphan).is_empty());
+    let h = one(&r, FindingKind::HeavyProcess, 3600);
+    assert_eq!(h.suggestion, Suggestion::Review);
+    assert_eq!(r.findings.len(), 1, "{:#?}", r.findings);
+}
+
+#[test]
+fn codex_broker_orphan() {
+    let (_, r) = run("codex_broker_orphan");
+    assert_eq!(class(&r, 4500).kind, Kind::AgentHelper);
+    assert_eq!(
+        class(&r, 4500).signature_id.as_deref(),
+        Some("agent_codex_broker")
+    );
+    let f = one(&r, FindingKind::Orphan, 4500);
+    assert_eq!(f.confidence, Confidence::Confirmed);
+    assert_eq!(f.suggestion, terminate(true));
+    assert!(has_reason(f, "owner_dead") && has_reason(f, "owner_from_env_claude_pid"));
+    assert_eq!(f.descendant_count, 2);
+    assert_eq!(r.findings.len(), 1, "{:#?}", r.findings);
+}
+
+#[test]
+fn claude_daemon_env_owner_covers_subtree() {
+    let (_, r) = run("claude_daemon_env_owner");
+    let f = one(&r, FindingKind::Orphan, 1300);
+    assert_eq!(f.confidence, Confidence::Likely);
+    assert_eq!(f.suggestion, terminate(true));
+    assert!(has_reason(f, "transient_origin") && has_reason(f, "spawner_dead"));
+    assert!(has_reason(f, "owner_from_env_cmux_claude_pid"));
+    assert_eq!(f.descendant_count, 5);
+    assert!(
+        of_kind(&r, FindingKind::LogicalOrphan).is_empty(),
+        "{:#?}",
+        r.findings
+    );
+    assert_eq!(r.findings.len(), 1, "{:#?}", r.findings);
+}
+
+#[test]
+fn pyright_workers_not_duplicate() {
+    let (_, r) = run("pyright_workers_not_duplicate");
+    for pid in [3701, 3711, 3721] {
+        assert_eq!(class(&r, pid).kind, Kind::LanguageServer, "pid {pid}");
+        assert_eq!(class(&r, pid).signature_id.as_deref(), Some("ls_pyright"));
+    }
+    assert!(r.findings.is_empty(), "{:#?}", r.findings);
 }

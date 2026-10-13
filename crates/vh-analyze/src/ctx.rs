@@ -66,6 +66,17 @@ pub(crate) struct Ctx<'a> {
     pub tmp_cwd: Vec<bool>,
 }
 
+const DAEMON_BY_DESIGN: &[&str] = &[
+    "agent_omo_lsp_daemon",
+    "android_adb_server",
+    "ls_biome",
+    "w_watchman",
+    "w_turbo_daemon",
+    "w_nx_daemon",
+    "build_gradle_daemon",
+    "build_kotlin_daemon",
+];
+
 const ENV_OWNER_KEYS: &[(&str, &str, &str)] = &[
     ("CLAUDE_PID", "env:CLAUDE_PID", "Claude 세션"),
     ("CMUX_CLAUDE_PID", "env:CMUX_CLAUDE_PID", "Claude 세션"),
@@ -266,6 +277,12 @@ impl<'a> Ctx<'a> {
             self.cls[i].kind,
             Kind::System | Kind::AppHelper | Kind::GuiApp
         ) || self.cls[i].sig == "emu_sim_runtime"
+    }
+
+    /// launchd 밑(ppid 1)에서 도는 것이 정상인 데몬·크래시 리포터. 고아·논리적 고아 판정에서 뺀다.
+    pub(crate) fn daemon_by_design(&self, i: usize) -> bool {
+        DAEMON_BY_DESIGN.contains(&self.cls[i].sig)
+            || self.feats[i].exe_base.ends_with("crashpad_handler")
     }
 
     fn judge_pid(&self, i: usize, pid: i32) -> (Option<ProcRef>, Option<DeadWhy>) {

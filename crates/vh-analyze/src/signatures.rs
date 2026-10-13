@@ -42,6 +42,7 @@ pub(crate) enum C {
     ChromiumExe,
     InBinDir,
     EnvIn(&'static str, &'static [&'static str]),
+    EnvHas(&'static str),
     BundleMain,
     InAppBundlePath,
     AgentEntry(&'static str),
@@ -204,6 +205,39 @@ pub(crate) const SIGNATURES: &[Signature] = &[
         "Claude 백그라운드 데몬",
     ),
     sig(
+        "agent_codex_broker",
+        K::AgentHelper,
+        10,
+        O,
+        All(&[
+            EntryContains("/openai-codex/"),
+            NameBase("app-server-broker"),
+        ]),
+        "codex 앱 서버 중계(브로커)",
+    ),
+    sig(
+        "agent_omo_py_kernel",
+        K::AgentHelper,
+        10,
+        O,
+        All(&[
+            InterpIs(Interp::Python),
+            Any(&[
+                EntryContains("/senpi-codemode/src/kernels/"),
+                EnvHas("SENPI_PY_KERNEL_PARENT_PID"),
+            ]),
+        ]),
+        "omo 파이썬 커널",
+    ),
+    sig(
+        "agent_omo_lsp_daemon",
+        K::LanguageServer,
+        10,
+        O,
+        EntryContains("/omo-ai/plugin/runtime/lsp-daemon/"),
+        "omo 언어 서버 데몬",
+    ),
+    sig(
         "mcp_chrome_devtools",
         K::McpServer,
         20,
@@ -249,6 +283,14 @@ pub(crate) const SIGNATURES: &[Signature] = &[
         21,
         A,
         TokenBaseSuffixAny(&["-mcp", "_mcp"]),
+        "MCP 서버: {mcp_name}",
+    ),
+    sig(
+        "mcp_extra_spec",
+        K::McpServer,
+        21,
+        A,
+        TokenContains("[mcp]"),
         "MCP 서버: {mcp_name}",
     ),
     sig(
@@ -529,6 +571,22 @@ pub(crate) const SIGNATURES: &[Signature] = &[
         "테스트 실행기({entry_name})",
     ),
     sig(
+        "test_agent_browser",
+        K::TestTool,
+        42,
+        O,
+        ExeBasePrefix("agent-browser"),
+        "agent-browser 브라우저 자동화 데몬",
+    ),
+    sig(
+        "android_adb_server",
+        K::Emulator,
+        42,
+        O,
+        All(&[ExeBase("adb"), Token("fork-server")]),
+        "Android 디버그 브리지(adb) 서버",
+    ),
+    sig(
         "tun_ngrok",
         K::Tunnel,
         42,
@@ -581,11 +639,14 @@ pub(crate) const SIGNATURES: &[Signature] = &[
         K::LanguageServer,
         50,
         O,
-        NameBaseAny(&[
-            "pyright",
-            "pyright-langserver",
-            "basedpyright",
-            "basedpyright-langserver",
+        Any(&[
+            NameBaseAny(&[
+                "pyright",
+                "pyright-langserver",
+                "basedpyright",
+                "basedpyright-langserver",
+            ]),
+            EntryContains("pyright/langserver.index.js"),
         ]),
         "Python 언어 서버(pyright)",
     ),
@@ -620,6 +681,14 @@ pub(crate) const SIGNATURES: &[Signature] = &[
         A,
         ExeBase("sourcekit-lsp"),
         "Swift 언어 서버",
+    ),
+    sig(
+        "ls_biome",
+        K::LanguageServer,
+        50,
+        O,
+        All(&[ExeBase("biome"), Token("__run_server")]),
+        "Biome 린트·포맷 데몬",
     ),
     sig(
         "w_watchman",
@@ -1052,6 +1121,7 @@ pub(crate) fn eval(cond: &C, c: &Ctx) -> bool {
             .as_deref()
             .is_some_and(|e| e.contains("/node_modules/.bin/")),
         EnvIn(k, vs) => c.p.env.get(*k).is_some_and(|v| vs.contains(&v.as_str())),
+        EnvHas(k) => c.p.env.contains_key(*k),
         BundleMain => f.bundle_main,
         InAppBundlePath => f.app_count > 0 && f.origin != ExeOrigin::DevToolBundle,
         AgentEntry(w) => is_agent_entry(c, w),
@@ -1067,6 +1137,9 @@ fn mcp_name(f: &Feat) -> String {
         if let Some(i) = t.find("@modelcontextprotocol/server-") {
             let rest = &t[i + "@modelcontextprotocol/server-".len()..];
             return Some(rest.split(['/', '@']).next().unwrap_or(rest).to_string());
+        }
+        if let Some(i) = b.find("[mcp]") {
+            return Some(b[..i].to_string());
         }
         if let Some(rest) = b.strip_prefix("mcp-server-") {
             return Some(rest.to_string());
@@ -1758,6 +1831,36 @@ mod tests {
             ("rt_interpreter", ex(NODE, &["node", "server.js"])),
             ("other", ex("/opt/homebrew/bin/htop", &["htop"])),
         ];
+        v.extend([
+            (
+                "agent_codex_broker",
+                ex(NODE, &["node", "/Users/demo/.claude/plugins/cache/openai-codex/codex/1.0.3/scripts/app-server-broker.mjs", "serve"]),
+            ),
+            (
+                "agent_omo_py_kernel",
+                ex(XPY, &[XPY, "-u", "/Users/demo/.omo/agent/runtime/r1/node_modules/@demo/senpi-codemode/src/kernels/py/prelude.py"]),
+            ),
+            (
+                "agent_omo_lsp_daemon",
+                ex("/Users/demo/.bun/bin/bun", &["bun", "/Users/demo/.bun/install/global/node_modules/omo-ai/plugin/runtime/lsp-daemon/dist/cli.js", "daemon"]),
+            ),
+            (
+                "mcp_extra_spec",
+                ex("/Users/demo/.local/bin/uv", &["uv", "tool", "uvx", "--isolated", "--from", "ouroboros-ai[mcp]"]),
+            ),
+            (
+                "test_agent_browser",
+                ex("/Users/demo/.local/lib/node_modules/agent-browser/bin/agent-browser-darwin-arm64", &["agent-browser-darwin-arm64"]),
+            ),
+            (
+                "android_adb_server",
+                ex("/Users/demo/Library/Android/sdk/platform-tools/adb", &["adb", "-L", "tcp:5037", "fork-server", "server"]),
+            ),
+            (
+                "ls_biome",
+                ex("/Users/demo/dev/shop/node_modules/@biomejs/cli-darwin-arm64/biome", &["biome", "__run_server", "--stop-on-disconnect"]),
+            ),
+        ]);
         let mut launchd = ex("/sbin/launchd", &["/sbin/launchd"]);
         launchd.pid = 1;
         v.push(("sys_launchd", launchd));
@@ -1837,6 +1940,14 @@ mod tests {
         assert_eq!(
             run(&ex("/Users/demo/.local/bin/aside", &["aside", "mcp"])).2,
             "MCP 서버: aside"
+        );
+        assert_eq!(
+            run(&ex(
+                "/Users/demo/.local/bin/uv",
+                &["uv", "tool", "uvx", "--from", "ouroboros-ai[mcp]"]
+            ))
+            .2,
+            "MCP 서버: ouroboros-ai"
         );
         assert_eq!(
             run(&ex("/Applications/Demo.app/Contents/MacOS/Demo", &["Demo"])).2,
