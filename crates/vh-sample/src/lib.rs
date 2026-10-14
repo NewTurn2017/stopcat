@@ -5,11 +5,14 @@
 //!
 //! 출처: 기본 표는 `sysctl(KERN_PROC_ALL)`(모든 uid, 좀비 포함). 자기 uid 프로세스만
 //! libproc(TASKALLINFO, VNODEPATHINFO, LISTFDS, FDSOCKETINFO)과 KERN_PROCARGS2를 읽는다.
+//! FDSOCKETINFO 한 번으로 LISTEN(`listeners`)과 ESTABLISHED(`Proc::tcp`)를 함께 얻는다.
+//! 디스크 누적 바이트는 CPU와 같은 rusage v4에서 읽는다.
 //! `proc_pidpath`·`proc_pid_rusage`는 모든 uid에 시도한다. 외부 명령은 `launchctl list` 1회.
 
 mod ffi;
 mod launchd;
 mod list;
+mod peers;
 mod procargs;
 mod procinfo;
 mod roots;
@@ -87,6 +90,8 @@ struct CpuSample {
     at: Instant,
     cpu_ns: u64,
     start_abs: u64,
+    /// 첫 샘플의 디스크 읽기+쓰기 누적 바이트.
+    disk: u64,
 }
 
 /// 이 맥의 현재 상태를 읽어 스냅샷을 만든다. 읽기 전용이며 패닉하지 않는다.
@@ -210,10 +215,15 @@ pub fn collect(opts: &CollectOptions) -> Snapshot {
                     p.footprint_bytes = Some(ri.ri_phys_footprint);
                     p.rss_bytes = Some(ri.ri_resident_size);
                     p.cpu_time_ns = Some(cpu_ns);
+                    p.disk_read_bytes = Some(ri.ri_diskio_bytesread);
+                    p.disk_written_bytes = Some(ri.ri_diskio_byteswritten);
                     sample = Some(CpuSample {
                         at: Instant::now(),
                         cpu_ns,
                         start_abs: ri.ri_proc_start_abstime,
+                        disk: ri
+                            .ri_diskio_bytesread
+                            .saturating_add(ri.ri_diskio_byteswritten),
                     });
                 }
                 Err(e) if own => {
@@ -233,7 +243,11 @@ pub fn collect(opts: &CollectOptions) -> Snapshot {
     let mut listeners = Vec::new();
     let mut sockets_time = Duration::ZERO;
     let mut socket_fd_errors = 0usize;
-    for p in procs.iter_mut() {
+    let mut conns: Vec<peers::Conn> = Vec::new();
+    let mut estab: Vec<sockets::EstabSock> = Vec::new();
+    let mut tcp_known = vec![false; procs.len()];
+    let mut conn_cap_hit = 0usize;
+    for (idx, p) in procs.iter_mut().enumerate() {
         if p.status == ProcStatus::Zombie || p.pid <= 0 {
             continue;
         }
@@ -287,16 +301,27 @@ pub fn collect(opts: &CollectOptions) -> Snapshot {
             )),
         }
         let ts = Instant::now();
-        match sockets::listeners_of(
+        estab.clear();
+        match sockets::sockets_of(
             p.pid,
             p.start_time_unix_ms,
             nfiles,
             &mut fd_buf,
             &mut sock_buf,
+            &mut estab,
         ) {
             Ok(s) => {
                 listeners.extend(s.listeners);
                 socket_fd_errors += s.fd_errors;
+                if conns.len() + estab.len() > peers::MAX_CONNS {
+                    conn_cap_hit += 1;
+                } else {
+                    tcp_known[idx] = true;
+                    conns.extend(estab.iter().map(|&sock| peers::Conn {
+                        proc_idx: idx,
+                        sock,
+                    }));
+                }
             }
             Err(e) => errors.push(err(Some(p.pid), "fds", Some(e), "PROC_PIDLISTFDS 실패")),
         }
@@ -322,6 +347,27 @@ pub fn collect(opts: &CollectOptions) -> Snapshot {
             "pidpath",
             None,
             format!("남의 사용자 프로세스 {other_path_fail}개: 실행 파일 경로 읽기 실패"),
+        ));
+    }
+    let ts = Instant::now();
+    let pids: Vec<i32> = procs.iter().map(|p| p.pid).collect();
+    for (p, tcp) in procs
+        .iter_mut()
+        .zip(peers::summarize(&conns, &pids, &tcp_known))
+    {
+        p.tcp = tcp;
+    }
+    drop(conns);
+    sockets_time += ts.elapsed();
+    if conn_cap_hit > 0 {
+        errors.push(err(
+            None,
+            "tcp",
+            None,
+            format!(
+                "ESTABLISHED 기록 상한({}개)을 넘어 프로세스 {conn_cap_hit}개의 연결 요약을 비움(모름)",
+                peers::MAX_CONNS
+            ),
         ));
     }
     if socket_fd_errors > 0 {
@@ -395,6 +441,12 @@ pub fn collect(opts: &CollectOptions) -> Snapshot {
                 p.cpu_pct = Some((cpu_ns.saturating_sub(s.cpu_ns) as f64 / wall_ns * 100.0) as f32);
             }
             p.cpu_time_ns = Some(cpu_ns);
+            let disk = ri
+                .ri_diskio_bytesread
+                .saturating_add(ri.ri_diskio_byteswritten);
+            p.disk_read_bytes = Some(ri.ri_diskio_bytesread);
+            p.disk_written_bytes = Some(ri.ri_diskio_byteswritten);
+            p.disk_io_delta_bytes = Some(disk.saturating_sub(s.disk));
         }
     }
     timings.cpu_wait_ms = ms(t.elapsed());

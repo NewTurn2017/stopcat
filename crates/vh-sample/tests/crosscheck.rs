@@ -469,3 +469,89 @@ fn crosscheck_5_memory() {
         "pressure {pressure_ok} swap {swap_diff:.4} comp {comp_diff:.4}"
     );
 }
+
+fn lsof_established(uid: u32) -> HashMap<i32, usize> {
+    let uid = uid.to_string();
+    let out = run(
+        "/usr/sbin/lsof",
+        &[
+            "-nP",
+            "-iTCP",
+            "-sTCP:ESTABLISHED",
+            "-a",
+            "-u",
+            &uid,
+            "-Fpf",
+        ],
+    );
+    let mut m = HashMap::new();
+    let mut pid = 0;
+    for line in out.lines() {
+        if let Some(p) = line.strip_prefix('p') {
+            pid = p.parse().unwrap_or(0);
+        } else if line.starts_with('f') {
+            *m.entry(pid).or_insert(0) += 1;
+        }
+    }
+    m
+}
+
+#[test]
+#[ignore]
+fn crosscheck_6_established() {
+    // SAFETY: getuid는 항상 성공한다.
+    let uid = unsafe { libc::getuid() };
+    let before = lsof_established(uid);
+    let s = snapshot();
+    let after = lsof_established(uid);
+    let mut compared = 0usize;
+    let mut unstable = 0usize;
+    let mut unknown = 0usize;
+    let mut mismatch = Vec::new();
+    for p in s
+        .processes
+        .iter()
+        .filter(|p| p.uid == s.self_uid && p.pid != s.self_pid)
+    {
+        let b = before.get(&p.pid).copied().unwrap_or(0);
+        let a = after.get(&p.pid).copied().unwrap_or(0);
+        if a != b {
+            unstable += 1;
+            continue;
+        }
+        let Some(t) = &p.tcp else {
+            if p.status != ProcStatus::Zombie {
+                unknown += 1;
+            }
+            continue;
+        };
+        compared += 1;
+        if t.established as usize != b {
+            mismatch.push(json!({"pid": p.pid, "vh": t.established, "lsof": b}));
+        }
+    }
+    let total: u64 = s
+        .processes
+        .iter()
+        .filter_map(|p| p.tcp.as_ref())
+        .map(|t| u64::from(t.established))
+        .sum();
+    let resolved: u64 = s
+        .processes
+        .iter()
+        .filter_map(|p| p.tcp.as_ref())
+        .map(|t| u64::from(t.loopback - t.unresolved))
+        .sum();
+    let pass = mismatch.is_empty();
+    write_result(
+        "crosscheck_6_established",
+        pass,
+        json!({
+            "criterion": "자기 uid 프로세스마다 ESTABLISHED TCP 수가 lsof -nP -iTCP -sTCP:ESTABLISHED (fd 수)와 같음. 수집 전·후 lsof 수가 다른 pid는 unstable로 빼고 센다. 설명 없는 불일치 0이면 PASS",
+            "compared_pids": compared, "unstable_skipped": unstable, "tcp_unknown": unknown,
+            "mismatch": mismatch, "vh_established_total": total, "vh_loopback_resolved_total": resolved,
+            "sockets_ms": s.timings_ms.sockets_ms, "total_ms": s.timings_ms.total_ms,
+        }),
+    );
+    assert!(pass, "불일치 {}건", mismatch.len());
+}

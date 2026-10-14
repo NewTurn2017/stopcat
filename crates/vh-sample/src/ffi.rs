@@ -1,7 +1,7 @@
 //! raw FFI 선언.
 //!
 //! 크기·오프셋은 SDK 헤더(`xcrun --show-sdk-path`/usr/include)를 C로 컴파일한 프로브 값이다
-//! (evidence `CORE/FFI-LAYOUT.json`). 아래 const assert가 그 값과 다르면 컴파일되지 않는다.
+//! (evidence W1 `CORE/FFI-LAYOUT.json`, W4 `CORE/FFI-LAYOUT-W4.json`). 아래 const assert가 그 값과 다르면 컴파일되지 않는다.
 //! union이 들어 있는 구조체(kinfo_proc, socket_fdinfo)는 바이트 버퍼로 두고 필요한 필드만 오프셋으로 읽는다.
 
 use std::mem::{offset_of, size_of};
@@ -15,6 +15,7 @@ pub const PROC_PIDFDSOCKETINFO: c_int = 3;
 pub const PROX_FDTYPE_SOCKET: u32 = 2;
 pub const SOCKINFO_TCP: i32 = 2;
 pub const TSI_S_LISTEN: i32 = 1;
+pub const TSI_S_ESTABLISHED: i32 = 4;
 pub const INI_IPV4: u8 = 1;
 pub const RUSAGE_INFO_V4: c_int = 4;
 pub const KERN_PROCARGS2: c_int = 49;
@@ -99,7 +100,10 @@ pub struct RusageInfoV4 {
     pub ri_resident_size: u64,
     pub ri_phys_footprint: u64,
     pub ri_proc_start_abstime: u64,
-    pub _ri_rest: [u64; 26],
+    pub _ri_skip: [u64; 7],
+    pub ri_diskio_bytesread: u64,
+    pub ri_diskio_byteswritten: u64,
+    pub _ri_rest: [u64; 17],
 }
 
 /// struct proc_vnodepathinfo (sys/proc_info.h). vnode_info 부분은 쓰지 않으므로 바이트로 둔다.
@@ -185,8 +189,11 @@ pub struct SocketFdInfo(pub [u8; SOCKET_FDINFO_SIZE]);
 pub const SOCKET_FDINFO_SIZE: usize = 792;
 pub const SOI_FAMILY: usize = 184;
 pub const SOI_KIND: usize = 256;
+pub const INSI_FPORT: usize = 264;
 pub const INSI_LPORT: usize = 268;
 pub const INSI_VFLAG: usize = 288;
+pub const INSI_FADDR6: usize = 296;
+pub const INSI_FADDR4: usize = 308;
 pub const INSI_LADDR6: usize = 312;
 pub const INSI_LADDR4: usize = 324;
 pub const TCPSI_STATE: usize = 344;
@@ -210,6 +217,9 @@ const _: () = {
     assert!(offset_of!(RusageInfoV4, ri_resident_size) == 64);
     assert!(offset_of!(RusageInfoV4, ri_phys_footprint) == 72);
     assert!(offset_of!(RusageInfoV4, ri_proc_start_abstime) == 80);
+    // W4 프로브(CORE/FFI-LAYOUT-W4.json): diskio 144·152.
+    assert!(offset_of!(RusageInfoV4, ri_diskio_bytesread) == 144);
+    assert!(offset_of!(RusageInfoV4, ri_diskio_byteswritten) == 152);
     assert!(size_of::<ProcVnodePathInfo>() == 2352);
     assert!(offset_of!(ProcVnodePathInfo, cdir_path) == 152);
     assert!(size_of::<ProcFdInfo>() == 8);
@@ -225,6 +235,11 @@ const _: () = {
     assert!(size_of::<MachTimebaseInfo>() == 8);
     assert!(size_of::<KinfoProc>() == 648);
     assert!(size_of::<SocketFdInfo>() == 792);
+    // W4 프로브: in_sockinfo 상대 포트·주소(fport 264, faddr ina_6 296, ina_46.i46a_addr4 308).
+    assert!(INSI_FPORT == 264 && INSI_FPORT + 4 == INSI_LPORT);
+    assert!(INSI_FADDR6 == 296 && INSI_FADDR6 + 16 == INSI_LADDR6);
+    assert!(INSI_FADDR4 == 308 && INSI_FADDR4 == INSI_FADDR6 + 12);
+    assert!(INSI_LADDR4 == INSI_LADDR6 + 12);
 };
 
 /// HOST_VM_INFO64_COUNT (= sizeof(vm_statistics64) / sizeof(integer_t)), 프로브 값 104.

@@ -24,6 +24,12 @@ fn collect_smoke_live_no_cpu() {
     assert!(me.argv_readable);
     assert!(me.exe.is_some() && me.cwd.is_some() && me.footprint_bytes.is_some());
     assert!(me.threads.is_some() && me.nice.is_some());
+    assert!(me.tcp.is_some(), "자기 프로세스 연결 요약은 Some");
+    assert!(me.disk_read_bytes.is_some() && me.disk_written_bytes.is_some());
+    assert!(
+        me.disk_io_delta_bytes.is_none(),
+        "CPU 두 번째 샘플이 없으면 구간 차이도 없음"
+    );
     let allow: HashSet<&str> = ENV_ALLOWLIST.iter().copied().collect();
     for p in &s.processes {
         assert!(
@@ -33,6 +39,14 @@ fn collect_smoke_live_no_cpu() {
         );
         if p.uid != s.self_uid {
             assert!(!p.argv_readable && p.argv.is_empty() && p.env.is_empty() && p.cwd.is_none());
+            assert!(p.tcp.is_none(), "남의 uid는 연결 요약 모름");
+        }
+        if let Some(t) = &p.tcp {
+            assert_eq!(t.established, t.loopback + t.external);
+            assert!(t.unresolved <= t.loopback);
+            assert!(t.peer_pids.len() <= vh_model::MAX_PEER_PIDS);
+            assert!(t.peer_pids.windows(2).all(|w| w[0] < w[1]));
+            assert!(!t.peer_pids.contains(&p.pid));
         }
         if p.status == ProcStatus::Zombie {
             assert!(p.exe.is_none() && p.footprint_bytes.is_none());
@@ -72,4 +86,10 @@ fn collect_live_with_cpu_interval() {
             .all(|c| c >= 0.0 && c.is_finite())
     );
     assert!(s.launchd_job_pids.is_empty() && s.project_roots.is_empty());
+    let me = s
+        .processes
+        .iter()
+        .find(|p| p.pid == s.self_pid)
+        .expect("자기 프로세스");
+    assert!(me.disk_io_delta_bytes.is_some(), "같은 구간 디스크 차이");
 }
