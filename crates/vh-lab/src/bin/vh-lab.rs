@@ -3,10 +3,11 @@ use std::path::PathBuf;
 use std::process::Command;
 
 const USAGE: &str = "사용법: vh-lab <명령> [옵션]
-  preflight --out <파일> [--vh <원본> --vh-copy <복사본> --vh-sha256 <값>]
+  preflight --out <파일> [--vh <원본> --vh-copy <복사본> --vh-sha256 <값>] [--wait-normal-secs 600]
   isolation-check --out <폴더> --report <파일>
   prepare-vh --src <원본> --dest <복사본> --sha256 <값>
-  scenarios --out <폴더> [--only A,B,C]
+  scenarios --out <폴더> [--only A,AF,B,BF,C,CF] [--vh <복사본> --vh-sha256 <값>]
+  invariants --out <폴더> [--vh <복사본> --vh-sha256 <값>]
   soak --vh <복사본> --vh-sha256 <값> --minutes <분> --sample-secs <초> --out <폴더>
   interval-ab --vh <복사본> --vh-sha256 <값> --minutes 15 --intervals 5000,30000 --out <폴더>
   stress --max-procs <≤300> --storm-secs <≤60> --out <폴더>
@@ -34,6 +35,14 @@ fn num(args: &[String], name: &str, default: u64) -> Result<u64, String> {
     }
 }
 
+fn vh_pair(args: &[String]) -> Result<Option<(PathBuf, String)>, String> {
+    match (opt(args, "--vh"), opt(args, "--vh-sha256")) {
+        (Some(a), Some(b)) => Ok(Some((PathBuf::from(a), b))),
+        (None, None) => Ok(None),
+        _ => Err("--vh와 --vh-sha256는 함께 필요".into()),
+    }
+}
+
 fn supervised(cmd: &str) -> bool {
     matches!(
         cmd,
@@ -41,6 +50,7 @@ fn supervised(cmd: &str) -> bool {
             | "isolation-check"
             | "kill-probe-lab"
             | "scenarios"
+            | "invariants"
             | "soak"
             | "interval-ab"
             | "stress"
@@ -91,6 +101,7 @@ fn run(args: &[String]) -> Result<bool, String> {
                 &out,
                 vh.as_ref()
                     .map(|(a, b, c)| (a.as_path(), b.as_path(), c.as_str())),
+                num(rest, "--wait-normal-secs", 0)?,
             )
             .map_err(io)
         }
@@ -117,7 +128,27 @@ fn run(args: &[String]) -> Result<bool, String> {
             let only = opt(rest, "--only")
                 .map(|s| s.split(',').map(|x| x.trim().to_string()).collect())
                 .unwrap_or_default();
-            vh_lab::scenarios::run(&need(rest, "--out")?, &only).map_err(io)
+            let vh = vh_pair(rest)?;
+            vh_lab::scenarios::run(
+                &need(rest, "--out")?,
+                &only,
+                vh.as_ref().map(|(p, s)| vh_lab::invariants::VhCopy {
+                    path: p.as_path(),
+                    sha256: s.as_str(),
+                }),
+            )
+            .map_err(io)
+        }
+        "invariants" => {
+            let vh = vh_pair(rest)?;
+            vh_lab::invariants::run(
+                &need(rest, "--out")?,
+                vh.as_ref().map(|(p, s)| vh_lab::invariants::VhCopy {
+                    path: p.as_path(),
+                    sha256: s.as_str(),
+                }),
+            )
+            .map_err(io)
         }
         "soak" => vh_lab::soak::soak(
             &need(rest, "--vh")?,

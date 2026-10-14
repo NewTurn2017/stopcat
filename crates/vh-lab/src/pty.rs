@@ -48,6 +48,16 @@ pub fn notify_only_env(state_dir: &Path) -> Vec<(String, String)> {
     v
 }
 
+/// H1: 알림만 env + `VH_E2E_FORCE_HEALTH=watch`. `gated`가 false면 `VH_E2E_ALLOW_PIDS`를 빼서 훅이 무시되는지 본다.
+pub fn forced_env(state_dir: &Path, gated: bool) -> Vec<(String, String)> {
+    let mut v: Vec<(String, String)> = notify_only_env(state_dir)
+        .into_iter()
+        .filter(|(k, _)| gated || k != "VH_E2E_ALLOW_PIDS")
+        .collect();
+    v.push(("VH_E2E_FORCE_HEALTH".to_string(), "watch".to_string()));
+    v
+}
+
 pub fn base_env() -> Vec<(String, String)> {
     let mut v = vec![
         ("PATH".to_string(), "/usr/bin:/bin".to_string()),
@@ -229,12 +239,22 @@ pub fn shim_main(args: &[String]) -> i32 {
 impl PtyVh {
     /// 측정 대상 vh(notify env). shim은 지금 실행 중인 vh-lab 자신.
     pub fn spawn(vh: &Path, state_dir: &Path, cols: u16, rows: u16) -> io::Result<PtyVh> {
+        PtyVh::spawn_env(vh, state_dir, cols, rows, notify_only_env(state_dir))
+    }
+
+    pub fn spawn_env(
+        vh: &Path,
+        state_dir: &Path,
+        cols: u16,
+        rows: u16,
+        env: Vec<(String, String)>,
+    ) -> io::Result<PtyVh> {
         let shim = std::env::current_exe()?;
         PtyVh::spawn_program(
             &shim,
             vh,
             &[],
-            notify_only_env(state_dir),
+            env,
             &state_dir.join("pty-shim.json"),
             cols,
             rows,

@@ -19,6 +19,12 @@ pub const FANOUT: &str = "VH_LAB_FANOUT";
 pub const FLICKER_MAX: &str = "VH_LAB_FLICKER_MAX";
 pub const FLICKER_SECS: &str = "VH_LAB_FLICKER_SECS";
 pub const TAG: &str = "VH_TAG";
+pub const CONNECT_PORT: &str = "VH_LAB_CONNECT_PORT";
+pub const HOLD_SECS: &str = "VH_LAB_HOLD_SECS";
+/// SPAWN 명세 env 값이 이것이면 띄우는 도우미 자기 pid로 바꾼다(가짜 주인 밑 작업의 CLAUDE_PID).
+pub const PARENT_PID_TOKEN: &str = "{parent_pid}";
+/// Serve가 받은 포트를 쓰는 파일(cwd 안).
+pub const PORT_FILE: &str = "port";
 
 /// 도우미 복사본 이름(전부 같은 바이너리).
 pub const HELPER_NAMES: &[&str] = &[
@@ -33,6 +39,7 @@ pub const HELPER_NAMES: &[&str] = &[
     "lab-fanout",
     "lab-exit",
     "lab-flicker",
+    "lab-client",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,6 +54,8 @@ pub enum Role {
     Flicker,
     Blip,
     Selftest,
+    Serve,
+    Client,
 }
 
 impl Role {
@@ -61,6 +70,8 @@ impl Role {
             Role::Flicker => "flicker",
             Role::Blip => "blip",
             Role::Selftest => "selftest",
+            Role::Serve => "serve",
+            Role::Client => "client",
         }
     }
 
@@ -75,6 +86,8 @@ impl Role {
             "flicker" => Role::Flicker,
             "blip" => Role::Blip,
             "selftest" => Role::Selftest,
+            "serve" => Role::Serve,
+            "client" => Role::Client,
             _ => return None,
         })
     }

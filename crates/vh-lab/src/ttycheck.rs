@@ -243,7 +243,9 @@ pub fn run(out: &Path, vh: Option<(&Path, &str)>) -> io::Result<bool> {
         let state = out.join("vh-state");
         write_config(&state, None)?;
         let mut p = PtyVh::spawn(vh, &state, 80, 24)?;
-        let ready = p.wait_for("지킴이", Duration::from_secs(15)).is_some();
+        let ready = p
+            .wait_for(crate::strings::REDRAW_MARK, Duration::from_secs(15))
+            .is_some();
         let exit = p.quit(Duration::from_secs(10));
         let c = Case {
             id: "vh",

@@ -410,6 +410,17 @@ impl Lab {
         (ok, reaper.calls)
     }
 
+    /// 끝난 직접 자식을 회수한다(N4 클라이언트가 끝난 뒤 좀비로 범위에 남지 않게). 회수한 수.
+    pub fn reap_exited(&mut self) -> usize {
+        let mut n = 0;
+        for c in self.direct.iter_mut() {
+            if matches!(c.try_wait(), Ok(Some(_))) {
+                n += 1;
+            }
+        }
+        n
+    }
+
     pub fn alive(&self, r: ProcRef) -> bool {
         let live = self.kernel.probe(r.pid);
         live.liveness == Liveness::Alive && live.start_time_unix_ms == r.start_time_unix_ms

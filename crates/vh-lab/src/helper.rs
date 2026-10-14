@@ -69,9 +69,18 @@ fn spawn_spec(s: &ExecSpec) -> std::io::Result<Child> {
     if let Some(a0) = argv.first() {
         cmd.arg0(OsStr::from_bytes(a0));
     }
+    let me = std::process::id().to_string();
+    let env = s.env.iter().map(|(k, v)| {
+        let v = if v == spec::PARENT_PID_TOKEN {
+            me.clone()
+        } else {
+            v.clone()
+        };
+        (k.clone(), v)
+    });
     cmd.args(argv.iter().skip(1).map(|a| OsStr::from_bytes(a)))
         .env_clear()
-        .envs(&s.env)
+        .envs(env)
         .current_dir(&s.cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::null());
@@ -108,8 +117,32 @@ fn long_lived(role: Role) -> i32 {
     }
 
     let _listener = (std::env::var(spec::LISTEN).as_deref() == Ok("1"))
-        .then(|| std::net::TcpListener::bind("127.0.0.1:0").ok())
+        .then(|| crate::net::bind_loopback("127.0.0.1:0").ok())
         .flatten();
+
+    if role == Role::Serve {
+        match start_server() {
+            Ok(port) => {
+                let _ = writeln!(out, "port {port}");
+            }
+            Err(e) => {
+                let _ = writeln!(out, "error serve {e}");
+                return 1;
+            }
+        }
+    }
+    let hold = Duration::from_secs(env_u64(spec::HOLD_SECS, 0));
+    let mut held: Option<std::net::TcpStream> = None;
+    if role == Role::Client {
+        let port = env_u64(spec::CONNECT_PORT, 0) as u16;
+        match crate::net::connect_and_get(port, Duration::from_secs(5)) {
+            Ok(s) => held = Some(s),
+            Err(e) => {
+                let _ = writeln!(out, "error connect {e}");
+                return 1;
+            }
+        }
+    }
 
     let mut children: Vec<Child> = Vec::new();
     if let Ok(raw) = std::env::var(spec::SPAWN)
@@ -189,6 +222,10 @@ fn long_lived(role: Role) -> i32 {
             }
             return 0;
         }
+        if held.is_some() && elapsed >= hold {
+            drop(held.take());
+            return 0;
+        }
         children.retain_mut(|c| matches!(c.try_wait(), Ok(None)));
         if role == Role::Spin
             && !stop_spin.load(Ordering::Relaxed)
@@ -221,6 +258,17 @@ fn long_lived(role: Role) -> i32 {
             200
         }));
     }
+}
+
+/// 127.0.0.1 임시 포트에서 듣고, 포트를 cwd의 `port` 파일에 쓴다(쓰기 뒤 이름 바꾸기).
+fn start_server() -> std::io::Result<u16> {
+    let l = crate::net::bind_loopback("127.0.0.1:0")?;
+    let port = l.local_addr()?.port();
+    let tmp = format!("{}.tmp", spec::PORT_FILE);
+    std::fs::write(&tmp, port.to_string())?;
+    std::fs::rename(&tmp, spec::PORT_FILE)?;
+    crate::net::serve(l);
+    Ok(port)
 }
 
 struct Prepared {

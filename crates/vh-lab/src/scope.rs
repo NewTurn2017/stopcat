@@ -9,7 +9,8 @@ use serde::Serialize;
 use vh_act::{Policy, PriorityTarget, Selection};
 use vh_guard::{GuardBackend, GuardMemory};
 use vh_model::{
-    ActionOutcome, ActionPlan, FindingKind, GuardPolicy, Proc, ProcRef, Report, Snapshot,
+    ActionOutcome, ActionPlan, FindingKind, GuardPolicy, HealthLevel, Proc, ProcRef, Report,
+    Snapshot,
 };
 
 use crate::spec::TAG;
@@ -87,6 +88,7 @@ pub struct ShadowRec {
     pub watched_in_terminate: Vec<ProcRef>,
     pub watched_in_demote: Vec<ProcRef>,
     pub watched_in_pending: Vec<ProcRef>,
+    pub forced: Option<HealthLevel>,
 }
 
 /// 대조군: 전체 스냅샷 + 별도 기억으로 `decide`만(신호·실행 없음). 개수와 감시 대상(미끼) ProcRef만 남긴다.
@@ -105,9 +107,23 @@ impl Shadow {
         }
     }
 
-    pub fn observe(&mut self, full: &mut Snapshot, scope: &LabScope) -> ShadowRec {
+    pub fn observe(
+        &mut self,
+        full: &mut Snapshot,
+        scope: &LabScope,
+        forced: Option<HealthLevel>,
+    ) -> ShadowRec {
         vh_guard::fill_cpu_pct(full, &self.mem);
+        vh_guard::cpu::fill_disk_delta(full, &self.mem);
         let report = vh_analyze::analyze(full);
+        vh_guard::stability::observe(
+            &mut self.mem,
+            full,
+            &report,
+            forced,
+            &self.policy,
+            full.taken_at_unix_ms,
+        );
         let d = vh_guard::decide(
             &self.mem,
             full,
@@ -116,7 +132,6 @@ impl Shadow {
             full.taken_at_unix_ms,
         );
         self.mem.term_streak = d.next_term_streak.clone();
-        self.mem.cpu_streak = d.next_cpu_streak.clone();
         vh_guard::cpu::remember(&mut self.mem, full);
         let inside: BTreeSet<ProcRef> = full
             .processes
@@ -150,6 +165,7 @@ impl Shadow {
             watched_in_terminate: watched(d.terminate.iter().map(|c| c.target).collect()),
             watched_in_demote: watched(d.demote.iter().map(|c| c.target).collect()),
             watched_in_pending: watched(d.pending.iter().map(|p| p.target).collect()),
+            forced,
         }
     }
 }
@@ -174,12 +190,53 @@ pub struct ScopeLog {
     pub violations: Vec<Violation>,
 }
 
+/// 칸마다 하나인 강제 건강 손잡이. 지킴이 스레드(범위 백엔드)와 실행기가 같은 값을 본다.
+/// 바뀐 시각을 남겨 N5 판정이 '전환 뒤 taken_at 스캔'을 고를 수 있게 한다.
+#[derive(Debug, Clone, Default)]
+pub struct ForcedHealth(Arc<Mutex<ForcedState>>);
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct ForcedState {
+    pub level: Option<HealthLevel>,
+    pub changes: Vec<ForcedChange>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ForcedChange {
+    pub at_ms: u64,
+    pub level: Option<HealthLevel>,
+}
+
+impl ForcedHealth {
+    pub fn new(level: Option<HealthLevel>, at_ms: u64) -> Self {
+        let f = ForcedHealth::default();
+        f.set(level, at_ms);
+        f
+    }
+
+    pub fn get(&self) -> Option<HealthLevel> {
+        self.0.lock().ok().and_then(|s| s.level)
+    }
+
+    pub fn set(&self, level: Option<HealthLevel>, at_ms: u64) {
+        if let Ok(mut s) = self.0.lock() {
+            s.level = level;
+            s.changes.push(ForcedChange { at_ms, level });
+        }
+    }
+
+    pub fn state(&self) -> ForcedState {
+        self.0.lock().map(|s| s.clone()).unwrap_or_default()
+    }
+}
+
 pub struct ScopedBackend<B: GuardBackend> {
     inner: B,
     scope: LabScope,
     admitted: BTreeSet<ProcRef>,
     log: Arc<Mutex<ScopeLog>>,
     shadow: Option<Shadow>,
+    forced: ForcedHealth,
 }
 
 impl<B: GuardBackend> ScopedBackend<B> {
@@ -193,9 +250,16 @@ impl<B: GuardBackend> ScopedBackend<B> {
                 admitted,
                 log: log.clone(),
                 shadow,
+                forced: ForcedHealth::default(),
             },
             log,
         )
+    }
+
+    /// 이 칸의 강제 건강 손잡이를 단다(지킴이를 띄우기 전에).
+    pub fn with_forced(mut self, forced: ForcedHealth) -> Self {
+        self.forced = forced;
+        self
     }
 
     pub fn inner(&self) -> &B {
@@ -242,9 +306,10 @@ impl<B: GuardBackend> ScopedBackend<B> {
 impl<B: GuardBackend> GuardBackend for ScopedBackend<B> {
     fn collect(&mut self) -> Result<Snapshot, String> {
         let mut s = self.inner.collect()?;
+        let forced = self.forced.get();
         let shadow = self.shadow.as_mut().map(|sh| {
             let mut full = s.clone();
-            sh.observe(&mut full, &self.scope)
+            sh.observe(&mut full, &self.scope, forced)
         });
         let stats = self.scope.retain(&mut s);
         self.admitted.extend(stats.kept_refs.iter().copied());
@@ -292,6 +357,10 @@ impl<B: GuardBackend> GuardBackend for ScopedBackend<B> {
 
     fn now_unix_ms(&self) -> u64 {
         self.inner.now_unix_ms()
+    }
+
+    fn forced_health(&self) -> Option<HealthLevel> {
+        self.forced.get()
     }
 
     fn state_dir(&self) -> &Path {

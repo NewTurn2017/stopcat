@@ -15,6 +15,7 @@ use crate::util::{now_ms, sha256_file, write_json, write_jsonl};
 pub const LEAK_PASS_MB_PER_MIN: f64 = 0.02;
 pub const LEAK_UNSURE_MB_PER_MIN: f64 = 0.1;
 pub const CPU_MAX_PCT: f64 = 1.0;
+pub const Q5_FOOTPRINT_MEDIAN_MB: f64 = 12.0;
 
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct Sample {
@@ -120,7 +121,7 @@ pub fn soak(vh: &Path, sha: &str, minutes: u64, every_s: u64, out: &Path) -> io:
         if let Some(s) = sample(p.pid) {
             samples.push(s);
         }
-        saw_guard_line |= p.contains("알림만");
+        saw_guard_line |= p.contains(crate::strings::LEVEL_NOTIFY);
         std::thread::sleep(Duration::from_secs(every_s));
     }
     let exit = p.quit(Duration::from_secs(10));
@@ -139,6 +140,13 @@ pub fn soak(vh: &Path, sha: &str, minutes: u64, every_s: u64, out: &Path) -> io:
     let cpu_all = samples.first().and_then(|s| cpu_pct(&samples, s.at_ms));
     let cpu_last = cpu_pct(&samples, t_half);
     let leak = leak_verdict(fp_slope);
+    let mut late: Vec<f64> = samples
+        .iter()
+        .filter(|s| s.at_ms >= t_half)
+        .map(|s| mb(s.footprint_bytes))
+        .collect();
+    late.sort_by(f64::total_cmp);
+    let fp_median_late = late.get(late.len() / 2).copied();
     let cpu_v = match cpu_all {
         Some(c) if c <= CPU_MAX_PCT => "PASS",
         Some(_) => "FAIL",
@@ -168,6 +176,16 @@ pub fn soak(vh: &Path, sha: &str, minutes: u64, every_s: u64, out: &Path) -> io:
             "leak_basis": "phys_footprint 뒤 절반 기울기(≤ 0.02MB/분 PASS, ≤ 0.1 INCONCLUSIVE). RSS는 참고",
             "cpu_avg_pct": cpu_all, "cpu_last_half_pct": cpu_last,
             "leak_verdict": leak, "cpu_verdict": cpu_v,
+            "footprint_median_last_half_mb": fp_median_late,
+            "q5": {
+                "rule_ko": "PM Q5: 뒤 절반 footprint 중앙값 ≤ 12MB, 기울기 ≤ 0.02MB/분, CPU 평균 < 1.0%",
+                "footprint_median_ok": fp_median_late.map(|m| m <= Q5_FOOTPRINT_MEDIAN_MB),
+                "verdict": match (fp_median_late, cpu_all) {
+                    (Some(m), Some(c)) if m <= Q5_FOOTPRINT_MEDIAN_MB && leak == "PASS" && c < CPU_MAX_PCT => "PASS",
+                    (Some(_), Some(_)) => "FAIL",
+                    _ => "INCONCLUSIVE",
+                },
+            },
             "died_early": died_early,
             "exit_ok": ok_exit, "exit_code": exit.and_then(|e| e.code()),
             "termios_restored": restored,

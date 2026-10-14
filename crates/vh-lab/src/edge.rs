@@ -10,7 +10,7 @@ use serde_json::json;
 use vh_model::{AutoLevel, GuardEventKind, GuardPolicy};
 
 use crate::lab::{Lab, Meta};
-use crate::pty::{PtyVh, notify_only_env, write_config};
+use crate::pty::{PtyVh, forced_env, notify_only_env, write_config};
 use crate::run::GuardRun;
 use crate::scope::LabScope;
 use crate::spec::{self, ExecSpec, Role, encode_hex};
@@ -285,7 +285,7 @@ pub fn inconclusive_if(mut item: Item, missing: bool) -> Item {
     item
 }
 
-pub const TOO_SMALL_KO: &str = "창을 조금 키워 주세요";
+pub const TOO_SMALL_KO: &str = crate::strings::TOO_SMALL;
 
 /// 마지막이 80×24가 아니어야 끝의 80×24가 실제 크기 변화가 된다(PM 4단계 추가 절).
 pub const RESIZE_ORDER: [(u16, u16); 3] = [(120, 40), (60, 20), (80, 24)];
@@ -309,7 +309,7 @@ fn ui_checks(vh: &Path, out: &Path) -> io::Result<Vec<Item>> {
     let mark = p.mark();
     let final_changes_size = last != (80, 24);
     p.resize(80, 24);
-    let redraw_after = p.wait_for("지킴이", Duration::from_secs(10));
+    let redraw_after = p.wait_for(crate::strings::REDRAW_MARK, Duration::from_secs(10));
     let redraw_bytes = p.bytes_since(mark);
     let alive_after = p.alive();
     let exit = p.quit(Duration::from_secs(10));
@@ -353,8 +353,89 @@ fn ui_checks(vh: &Path, out: &Path) -> io::Result<Vec<Item>> {
         }),
         "TUI",
     );
+    let h1 = h1(vh, out)?;
     Ok(vec![
         inconclusive_if(e6, small_bytes == 0),
         inconclusive_if(e7, restored.is_none() || !controls.ok),
+        h1,
     ])
+}
+
+struct H1Case {
+    unstable_after_ms: Option<u64>,
+    normal_after_ms: Option<u64>,
+    screen_bytes: u64,
+    exit_0: bool,
+}
+
+fn h1_case(vh: &Path, state: &Path, env: Vec<(String, String)>) -> io::Result<H1Case> {
+    use crate::strings::{STATE_NORMAL, STATE_UNSTABLE_NOTIFY};
+    write_config(state, None)?;
+    let mut p = PtyVh::spawn_env(vh, state, 100, 30, env)?;
+    let t = Instant::now();
+    let (mut unstable, mut normal) = (None, None);
+    while t.elapsed() < Duration::from_secs(15) && unstable.is_none() && normal.is_none() {
+        if p.contains(STATE_UNSTABLE_NOTIFY) {
+            unstable = Some(t.elapsed().as_millis() as u64);
+        } else if p.contains(STATE_NORMAL) {
+            normal = Some(t.elapsed().as_millis() as u64);
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let bytes = p.mark();
+    let exit = p.quit(Duration::from_secs(10));
+    Ok(H1Case {
+        unstable_after_ms: unstable,
+        normal_after_ms: normal,
+        screen_bytes: bytes,
+        exit_0: exit.is_some_and(|e| e.success()),
+    })
+}
+
+/// H1: env 훅 경로(`VH_E2E_FORCE_HEALTH`)를 vh 바이너리로 확인. (a) 잠금 있음 → 불안정 표시,
+/// (b) 잠금 없음 → 무시(평소 표시), (c) 강제 없음 대조. 셋 다 알림만·알림 끔·임시 상태 폴더.
+fn h1(vh: &Path, out: &Path) -> io::Result<Item> {
+    let a = h1_case(
+        vh,
+        &out.join("h1-forced"),
+        forced_env(&out.join("h1-forced"), true),
+    )?;
+    let b = h1_case(
+        vh,
+        &out.join("h1-ungated"),
+        forced_env(&out.join("h1-ungated"), false),
+    )?;
+    let c = h1_case(
+        vh,
+        &out.join("h1-control"),
+        notify_only_env(&out.join("h1-control")),
+    )?;
+    let real_normal = c.normal_after_ms.is_some();
+    let mut item = it(
+        "H1",
+        "강제 env 화면: (a) VH_E2E_FORCE_HEALTH=watch + VH_E2E_ALLOW_PIDS → 불안정 표시, (b) ALLOW_PIDS 없음 → 무시, (c) 대조는 평소 표시, 모두 q로 exit 0",
+        &[
+            ("forced_shows_unstable", a.unstable_after_ms.is_some()),
+            ("ungated_ignored", b.normal_after_ms.is_some()),
+            ("control_normal", real_normal),
+            ("all_exit_0", a.exit_0 && b.exit_0 && c.exit_0),
+        ],
+        json!({
+            "strings": {"unstable": crate::strings::STATE_UNSTABLE_NOTIFY, "normal": crate::strings::STATE_NORMAL},
+            "a": {"unstable_after_ms": a.unstable_after_ms, "normal_after_ms": a.normal_after_ms, "screen_bytes": a.screen_bytes},
+            "b": {"unstable_after_ms": b.unstable_after_ms, "normal_after_ms": b.normal_after_ms, "screen_bytes": b.screen_bytes},
+            "c": {"unstable_after_ms": c.unstable_after_ms, "normal_after_ms": c.normal_after_ms, "screen_bytes": c.screen_bytes},
+            "how_ko": "화면 격자에서 문구만 찾음. 화면 내용은 저장하지 않음",
+        }),
+        "GUARD",
+    );
+    if !real_normal && c.unstable_after_ms.is_some() && item.verdict == Verdict::Fail {
+        item.verdict = Verdict::Inconclusive;
+        item.suspected_owner = "none".into();
+        item.observed["inconclusive_reason"] = json!("real_mac_not_normal(대조군이 불안정 표시)");
+    }
+    Ok(inconclusive_if(
+        item,
+        a.screen_bytes == 0 || b.screen_bytes == 0 || c.screen_bytes == 0,
+    ))
 }

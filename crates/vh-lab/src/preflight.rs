@@ -12,6 +12,7 @@ use crate::kernel::{loadavg_1m, pressure_level};
 use crate::lab::Lab;
 use crate::spec::{HELPER_NAMES, Role};
 use crate::util::{new_run_id, sha256_file, write_json};
+use vh_model::HealthLevel;
 
 pub const MAX_LOAD_1M: f64 = 12.0;
 pub const MAX_LAB_PROCS: usize = 300;
@@ -34,8 +35,46 @@ pub struct Preflight {
     pub supervisor_has_tty: Option<bool>,
     pub helpers: Vec<HelperCheck>,
     pub vh_copy: Option<VhCopy>,
+    pub health: HealthGate,
     pub ok: bool,
     pub reasons_ko: Vec<String>,
+}
+
+/// PM Q4: 실기기 건강(vh-analyze)이 정상이 아니면 최대 `wait_max_secs` 한 번 기다린다.
+/// 그래도 아니면 실행은 하고 정상 쪽 항목을 INCONCLUSIVE로 남긴다(여기서는 기록만, 실패 사유 아님).
+#[derive(Debug, Clone, Serialize)]
+pub struct HealthGate {
+    pub level_at_start: HealthLevel,
+    pub level_final: HealthLevel,
+    pub waited_secs: u64,
+    pub wait_max_secs: u64,
+    pub real_normal: bool,
+}
+
+fn health_now() -> HealthLevel {
+    let s = vh_sample::collect(&vh_sample::CollectOptions {
+        cpu_interval_ms: None,
+        launchd: false,
+        project_roots: false,
+    });
+    vh_analyze::analyze(&s).health.level
+}
+
+pub fn health_gate(wait_max_secs: u64) -> HealthGate {
+    let start = health_now();
+    let t = std::time::Instant::now();
+    let mut level = start;
+    while level != HealthLevel::Ok && t.elapsed().as_secs() < wait_max_secs {
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        level = health_now();
+    }
+    HealthGate {
+        level_at_start: start,
+        level_final: level,
+        waited_secs: t.elapsed().as_secs(),
+        wait_max_secs,
+        real_normal: level == HealthLevel::Ok,
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -85,7 +124,11 @@ pub fn copy_vh(src: &Path, dest: &Path, expected: &str) -> io::Result<VhCopy> {
     })
 }
 
-pub fn run(out: &Path, vh: Option<(&Path, &Path, &str)>) -> io::Result<bool> {
+pub fn run(
+    out: &Path,
+    vh: Option<(&Path, &Path, &str)>,
+    wait_normal_secs: u64,
+) -> io::Result<bool> {
     let (load_ok, mut reasons) = load_ok();
     let s = vh_sample::collect(&vh_sample::CollectOptions {
         cpu_interval_ms: None,
@@ -148,6 +191,7 @@ pub fn run(out: &Path, vh: Option<(&Path, &Path, &str)>) -> io::Result<bool> {
         }
         None => None,
     };
+    let health = health_gate(wait_normal_secs);
     let ok = reasons.is_empty() && load_ok;
     let pf = Preflight {
         loadavg_1m: loadavg_1m(),
@@ -158,6 +202,7 @@ pub fn run(out: &Path, vh: Option<(&Path, &Path, &str)>) -> io::Result<bool> {
         supervisor_has_tty: has_tty,
         helpers,
         vh_copy,
+        health,
         ok,
         reasons_ko: reasons,
     };

@@ -149,6 +149,16 @@ pub fn task_priority(pid: i32) -> Option<i32> {
     (n == size).then_some(ti.pti_priority)
 }
 
+/// `getpriority(PRIO_PROCESS, pid)`(nice 값). 결과 -1은 정상 값일 수 있어 errno로 실패를 가린다.
+pub fn nice_of(pid: i32) -> Option<i32> {
+    // SAFETY: errno 위치 포인터는 이 스레드 것이고, getpriority는 읽기 전용 호출이다.
+    let v = unsafe {
+        *libc::__error() = 0;
+        libc::getpriority(libc::PRIO_PROCESS, pid as libc::id_t)
+    };
+    (v != -1 || errno() == 0).then_some(v)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Usage {
     pub footprint_bytes: u64,
@@ -248,6 +258,8 @@ mod tests {
         let me = std::process::id() as i32;
         assert!(usage(me).is_some_and(|u| u.rss_bytes > 0));
         assert!(task_priority(me).is_some());
+        assert!(nice_of(me).is_some());
+        assert_eq!(nice_of(i32::MAX), None);
     }
 
     #[test]

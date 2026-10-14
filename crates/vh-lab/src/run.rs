@@ -10,13 +10,13 @@ use serde::{Deserialize, Serialize};
 use vh_act::{Liveness, RealSignaler};
 use vh_guard::{GuardHandle, GuardUpdate, RealGuardBackend, ShutdownReport};
 use vh_model::{
-    Confidence, FindingKind, GuardEvent, GuardPolicy, GuardStatus, Kind, ProcRef, ProcStatus,
-    Suggestion,
+    Confidence, FindingKind, GuardEvent, GuardPolicy, GuardStatus, HealthLevel, Kind, ProcRef,
+    ProcStatus, Section, Suggestion, TcpSummary, Usage,
 };
 
-use crate::kernel::{LabKernel, RealKernel, task_priority, usage};
+use crate::kernel::{LabKernel, RealKernel, nice_of, task_priority, usage};
 use crate::notify::NotifyRec;
-use crate::scope::{LabScope, ScopeLog, ScopedBackend, Shadow, pref};
+use crate::scope::{ForcedHealth, LabScope, ScopeLog, ScopedBackend, Shadow, pref};
 use crate::signal::{RecordingNotifier, RecordingSignaler, SignalCall, SignalLog};
 use crate::util::{now_ms, sha256_hex, write_json, write_jsonl};
 
@@ -30,6 +30,12 @@ pub struct FindingLite {
     pub short_ko: String,
     #[serde(default)]
     pub reason_codes: Vec<String>,
+    #[serde(default = "default_section")]
+    pub section: Section,
+}
+
+fn default_section() -> Section {
+    Section::Check
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -40,6 +46,8 @@ pub struct ClsLite {
     pub owner_alive: Option<bool>,
     pub owner_source: Option<String>,
     pub label_ko: String,
+    #[serde(default)]
+    pub usage: Usage,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -55,6 +63,10 @@ pub struct ProcLite {
     pub argv_len: usize,
     pub argv_sha256: String,
     pub argv: Option<Vec<String>>,
+    #[serde(default)]
+    pub tcp: Option<TcpSummary>,
+    #[serde(default)]
+    pub disk_io_delta_bytes: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -76,6 +88,19 @@ pub struct ScanRec {
     pub listeners: Vec<ListenLite>,
     pub collection_errors: usize,
     pub timings_total_ms: f64,
+    /// 분석이 본 실제 건강(강제값과 무관). 정상 실행 INCONCLUSIVE 판정에 쓴다.
+    #[serde(default = "default_health")]
+    pub health_level: HealthLevel,
+    #[serde(default)]
+    pub totals_unneeded_bytes: u64,
+    #[serde(default)]
+    pub totals_check_bytes: u64,
+    #[serde(default)]
+    pub totals_manual_bytes: u64,
+}
+
+fn default_health() -> HealthLevel {
+    HealthLevel::Ok
 }
 
 impl ScanRec {
@@ -98,6 +123,7 @@ impl ScanRec {
                     targets: f.targets.clone(),
                     short_ko: f.short_ko.clone(),
                     reason_codes: f.reason_codes.clone(),
+                    section: f.section,
                 })
                 .collect(),
             classified: u
@@ -111,6 +137,7 @@ impl ScanRec {
                     owner_alive: c.owner_alive,
                     owner_source: c.owner_source.clone(),
                     label_ko: c.label_ko.clone(),
+                    usage: c.usage.clone(),
                 })
                 .collect(),
             procs: s
@@ -130,6 +157,8 @@ impl ScanRec {
                         argv_len: joined.len(),
                         argv_sha256: sha256_hex(joined.as_bytes()),
                         argv: (joined.len() <= 1024).then(|| p.argv.clone()),
+                        tcp: p.tcp.clone(),
+                        disk_io_delta_bytes: p.disk_io_delta_bytes,
                     }
                 })
                 .collect(),
@@ -147,6 +176,10 @@ impl ScanRec {
                 .collect(),
             collection_errors: s.collection_errors.len(),
             timings_total_ms: s.timings_ms.total_ms,
+            health_level: u.report.health.level,
+            totals_unneeded_bytes: u.report.totals.unneeded_bytes,
+            totals_check_bytes: u.report.totals.check_bytes,
+            totals_manual_bytes: u.report.totals.manual_bytes,
         }
     }
 }
@@ -161,6 +194,8 @@ pub struct KernelRec {
     pub ppid: i32,
     pub pgid: i32,
     pub priority: Option<i32>,
+    #[serde(default)]
+    pub nice: Option<i32>,
     pub footprint_bytes: Option<u64>,
     pub cpu_ns: Option<u64>,
 }
@@ -184,6 +219,7 @@ pub fn sample_kernel(refs: &BTreeSet<ProcRef>) -> Vec<KernelRec> {
                 ppid: if same { live.ppid } else { 0 },
                 pgid: if same { live.pgid } else { 0 },
                 priority: running.then(|| task_priority(r.pid)).flatten(),
+                nice: running.then(|| nice_of(r.pid)).flatten(),
                 footprint_bytes: u.map(|u| u.footprint_bytes),
                 cpu_ns: u.map(|u| u.cpu_ns),
             }
@@ -205,6 +241,8 @@ pub struct GuardRun {
     pub notes: Arc<Mutex<Vec<NotifyRec>>>,
     pub scans: Vec<ScanRec>,
     pub shutdown: Option<ShutdownReport>,
+    pub forced: ForcedHealth,
+    pub policy: GuardPolicy,
 }
 
 impl GuardRun {
@@ -217,6 +255,27 @@ impl GuardRun {
         watch: BTreeSet<ProcRef>,
         policy: GuardPolicy,
     ) -> io::Result<GuardRun> {
+        Self::start_with(
+            dir,
+            sub,
+            scope,
+            lock,
+            watch,
+            policy,
+            ForcedHealth::default(),
+        )
+    }
+
+    /// `start`와 같고, 이 칸의 강제 건강 손잡이(`forced`)를 범위 백엔드에 단다.
+    pub fn start_with(
+        dir: &Path,
+        sub: &str,
+        scope: LabScope,
+        lock: BTreeSet<i32>,
+        watch: BTreeSet<ProcRef>,
+        policy: GuardPolicy,
+        forced: ForcedHealth,
+    ) -> io::Result<GuardRun> {
         let state = dir.join("state");
         std::fs::DirBuilder::new()
             .recursive(true)
@@ -227,6 +286,8 @@ impl GuardRun {
         let real = RealGuardBackend::with_state_dir(state, Box::new(sig), Box::new(notifier));
         let shadow = Shadow::new(policy.clone(), watch);
         let (scoped, scope_log) = ScopedBackend::new(real, scope.clone(), Some(shadow));
+        let scoped = scoped.with_forced(forced.clone());
+        let policy_copy = policy.clone();
         let (handle, rx) = GuardHandle::spawn_with(policy, scoped, true);
         let poll: Box<dyn FnMut() -> Option<GuardUpdate>> = Box::new(move || rx.try_recv().ok());
         Ok(GuardRun {
@@ -243,6 +304,8 @@ impl GuardRun {
             notes,
             scans: Vec::new(),
             shutdown: None,
+            forced,
+            policy: policy_copy,
         })
     }
 
@@ -297,6 +360,7 @@ impl GuardRun {
         write_jsonl(&self.dir.join("signals.jsonl"), &self.signal_calls())?;
         write_jsonl(&self.dir.join("notifications.jsonl"), &self.notifications())?;
         write_json(&self.dir.join("seq_gaps.json"), &self.seq_gaps)?;
+        write_json(&self.dir.join("forced.json"), &self.forced.state())?;
         if let Some(s) = &self.shutdown {
             write_json(
                 &self.dir.join("shutdown.json"),

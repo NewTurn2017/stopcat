@@ -5,11 +5,11 @@ use std::sync::{Arc, Mutex};
 use vh_act::{Policy, PriorityTarget, Selection, Signaler};
 use vh_guard::fake::{FakeClock, FakeGuardBackend, SyncSignaler, proc_, snapshot};
 use vh_guard::{Engine, GuardBackend, GuardUpdate};
-use vh_lab::scope::{LabScope, ScopedBackend};
+use vh_lab::scope::{ForcedHealth, LabScope, ScopedBackend};
 use vh_lab::signal::RecordingSignaler;
 use vh_model::{
-    ActionOutcome, ActionPlan, AutoLevel, CollectionError, Family, GuardPolicy, Listener,
-    PlannedAction, Proc, ProcRef, Report, Snapshot, Step,
+    ActionOutcome, ActionPlan, AutoLevel, CollectionError, Family, GuardPolicy, HealthLevel,
+    Listener, PlannedAction, Proc, ProcRef, Report, Snapshot, Step,
 };
 
 const SELF_PID: i32 = 4_000_000;
@@ -17,6 +17,8 @@ const UID: u32 = 501;
 const NOW: u64 = 1_800_000_000_000;
 const HOUR: u64 = 3_600_000;
 const TAG: &str = "lab-T-I";
+/// 5초씩 감는 가짜 시계에서 둘째 스캔 + idle_confirm 120초 + 연속 2회를 넘기는 스캔 수.
+const SCANS_PAST_IDLE_CONFIRM: usize = 40;
 
 const FOREIGN_ORPHAN: i32 = 5001;
 const FOREIGN_SPIN: i32 = 5002;
@@ -34,6 +36,9 @@ fn mcp(pid: i32, owner: i32, tag: Option<&str>) -> Proc {
     if let Some(t) = tag {
         p.env.insert("VH_TAG".into(), t.into());
     }
+    p.tcp = Some(Default::default());
+    p.disk_read_bytes = Some(0);
+    p.disk_written_bytes = Some(0);
     p
 }
 
@@ -94,15 +99,19 @@ fn t_iso_1_control_reaches_foreign_scoped_does_not() {
     let clock = FakeClock::at(NOW);
     let b = backend(&clock);
     let probe = b.probe();
+    probe.set_forced_health(Some(HealthLevel::Watch));
     let mut e = Engine::new(GuardPolicy::for_level(AutoLevel::Safe), b);
-    let _ = scan_n(&mut e, &clock, 6);
+    let _ = scan_n(&mut e, &clock, SCANS_PAST_IDLE_CONFIRM);
     let sent = probe.log.sent();
     assert!(
         sent.iter()
             .any(|&(p, s)| p == FOREIGN_ORPHAN && s == libc::SIGTERM),
-        "대조군: 범위 없이는 남의 고아에 TERM이 나가야 한다(테스트가 실패할 수 있음을 보임): {sent:?}"
+        "대조군: 범위 없이는(강제 불안정) 남의 고아에 TERM이 나가야 한다(테스트가 실패할 수 있음을 보임): {sent:?}"
     );
-    assert!(probe.log.demoted().contains(&FOREIGN_SPIN));
+    assert!(
+        probe.log.demoted().is_empty(),
+        "W4: 자동 우선순위 낮추기 없음"
+    );
 
     let clock = FakeClock::at(NOW);
     let mut b = backend(&clock);
@@ -121,8 +130,9 @@ fn t_iso_1_control_reaches_foreign_scoped_does_not() {
         refs: BTreeSet::new(),
     };
     let (scoped, log) = ScopedBackend::new(b, scope, None);
+    let scoped = scoped.with_forced(ForcedHealth::new(Some(HealthLevel::Watch), NOW));
     let mut e = Engine::new(GuardPolicy::for_level(AutoLevel::Safe), scoped);
-    let ups = scan_n(&mut e, &clock, 6);
+    let ups = scan_n(&mut e, &clock, SCANS_PAST_IDLE_CONFIRM);
     let (shutdown, _) = e.restore_all();
 
     let seen = targets_in(&ups);
@@ -136,12 +146,14 @@ fn t_iso_1_control_reaches_foreign_scoped_does_not() {
         sent.iter()
             .any(|&(p, s)| p == LAB_ORPHAN && s == libc::SIGTERM)
     );
-    assert_eq!(probe.log.demoted(), vec![LAB_SPIN]);
-    assert!(shutdown.undemoted.iter().all(|r| r.pid == LAB_SPIN));
-    assert_eq!(probe.log.undemoted(), vec![LAB_SPIN]);
+    assert!(
+        probe.log.demoted().is_empty(),
+        "W4: 실험실 폭주도 자동으로 낮추지 않음"
+    );
+    assert!(shutdown.undemoted.is_empty());
     let calls = calls.lock().unwrap();
     assert!(!calls.is_empty() && calls.iter().all(|c| c.allowed));
-    assert!(calls.iter().any(|c| c.op == "undemote" && c.ok));
+    assert!(calls.iter().all(|c| c.pid == LAB_ORPHAN && c.op == "send"));
     let log = log.lock().unwrap();
     assert!(log.violations.is_empty());
     assert!(
@@ -384,4 +396,34 @@ fn scoped_backend_drops_out_of_scope_plan_items_as_violations() {
     let v = &log.lock().unwrap().violations;
     assert_eq!(v.len(), 3);
     assert!(v.iter().all(|x| x.target == foreign));
+}
+
+#[test]
+fn forced_health_is_per_cell_switchable_and_reaches_the_engine() {
+    let clock = FakeClock::at(NOW);
+    let scope = LabScope {
+        tag: TAG.into(),
+        refs: BTreeSet::new(),
+    };
+    let fa = ForcedHealth::new(Some(HealthLevel::Watch), NOW);
+    let fb = ForcedHealth::default();
+    let (a, _) = ScopedBackend::new(backend(&clock), scope.clone(), None);
+    let a = a.with_forced(fa.clone());
+    let (b, _) = ScopedBackend::new(backend(&clock), scope, None);
+    let b = b.with_forced(fb.clone());
+    assert_eq!(GuardBackend::forced_health(&a), Some(HealthLevel::Watch));
+    assert_eq!(GuardBackend::forced_health(&b), None);
+
+    let mut e = Engine::new(GuardPolicy::for_level(AutoLevel::Safe), a);
+    let ups = scan_n(&mut e, &clock, 2);
+    assert!(
+        ups.iter()
+            .all(|u| u.status.health_forced == Some(HealthLevel::Watch) && u.status.unstable)
+    );
+    assert!(ups.iter().all(|u| u.report.health.level == HealthLevel::Ok));
+    fa.set(None, NOW + 10_000);
+    let ups = scan_n(&mut e, &clock, 2);
+    assert!(ups.iter().all(|u| u.status.health_forced.is_none()));
+    assert_eq!(fa.state().changes.len(), 2);
+    assert_eq!(GuardBackend::forced_health(&b), None);
 }

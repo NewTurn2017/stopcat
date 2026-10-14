@@ -80,7 +80,9 @@ pub fn build(i: &Inputs<'_>) -> io::Result<Value> {
     }
     let edge = read(&d.join("edge/result.json"));
     let tty = read(&d.join("termios/result.json"));
+    let inv = read(&d.join("invariants/result.json"));
     let mut items = merge_items(items_of(&scen), reruns);
+    items.extend(items_of(&inv));
     items.extend(items_of(&edge));
     items.extend(items_of(&tty));
     let soak = read(&d.join("soak/result.json"));
@@ -104,6 +106,7 @@ pub fn build(i: &Inputs<'_>) -> io::Result<Value> {
     });
     let leftover: u64 = [
         d.join("scenarios/cleanup.json"),
+        d.join("invariants/cleanup.json"),
         d.join("stress/cleanup.json"),
         d.join("edge/cleanup.json"),
     ]
@@ -149,10 +152,28 @@ pub fn build(i: &Inputs<'_>) -> io::Result<Value> {
             "stage2": i.isolation.and_then(read).map(|v| json!({"all_pass": v["all_pass"], "supervisor_kill": v["supervisor_kill"]})),
             "scenarios": read(&d.join("scenarios/isolation.json")),
             "scenarios_isolation_ok": scen.as_ref().map(|s| s["isolation_ok"].clone()),
+            "invariants": read(&d.join("invariants/isolation.json")),
+            "invariants_isolation_ok": inv.as_ref().map(|s| s["isolation_ok"].clone()),
         },
+        "invariants_timeline": inv.as_ref().map(|v| v["timeline"].clone()),
+        "lab_signals": {
+            "scenarios": read(&d.join("scenarios/lab_signals.json")),
+            "invariants": read(&d.join("invariants/lab_signals.json")),
+        },
+        "strings": crate::strings::table(),
+        "verdict_counts": counts(&items),
         "preflight": read(&d.join("preflight.json")),
         "leftover_processes": leftover,
     }))
+}
+
+fn counts(items: &[Value]) -> Value {
+    let mut m: BTreeMap<String, u64> = BTreeMap::new();
+    for it in items {
+        *m.entry(it["verdict"].as_str().unwrap_or("?").to_string())
+            .or_default() += 1;
+    }
+    json!(m)
 }
 
 pub fn write_findings(i: &Inputs<'_>) -> io::Result<()> {

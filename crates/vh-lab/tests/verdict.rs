@@ -80,6 +80,10 @@ fn scan(at: u64, seq: u64, pending: Vec<PendingAction>, events: Vec<GuardEvent>)
         listeners: vec![],
         collection_errors: 0,
         timings_total_ms: 40.0,
+        health_level: HealthLevel::Ok,
+        totals_unneeded_bytes: 0,
+        totals_check_bytes: 0,
+        totals_manual_bytes: 0,
     }
 }
 
@@ -93,6 +97,7 @@ fn krec(t: ProcRef, at: u64, alive: bool) -> KernelRec {
         ppid: 1,
         pgid: 1,
         priority: Some(12),
+        nice: Some(0),
         footprint_bytes: None,
         cpu_ns: None,
     }
@@ -160,6 +165,7 @@ fn missing_termination_blames_by_finding() {
         targets: vec![t],
         short_ko: String::new(),
         reason_codes: vec!["owner_dead".into()],
+        section: vh_model::Section::Unneeded,
     });
     let it = verdict::auto_terminated("S1", &rec, t, None);
     assert_eq!(
@@ -239,6 +245,8 @@ fn demote_without_sustained_cpu_is_inconclusive() {
             argv_len: 0,
             argv_sha256: String::new(),
             argv: None,
+            tcp: None,
+            disk_io_delta_bytes: None,
         });
     }
     let it = verdict::demoted_and_restored(&rec, t, Some(12));
@@ -265,6 +273,7 @@ fn notify_only_requires_exactly_one_mention() {
         owner_alive: Some(false),
         owner_source: None,
         label_ko: "Android 에뮬레이터(qemu)".into(),
+        usage: Default::default(),
     });
     assert_eq!(verdict::notify_only(&rec, t).verdict, Verdict::Pass);
     rec.notes.push(rec.notes[0].clone());
@@ -279,6 +288,7 @@ fn mcp(t: ProcRef, label: &str) -> ClsLite {
         owner_alive: Some(true),
         owner_source: None,
         label_ko: label.into(),
+        usage: Default::default(),
     }
 }
 
