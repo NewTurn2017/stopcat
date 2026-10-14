@@ -130,8 +130,6 @@ fn for_level_common_defaults() {
         assert_eq!(p.pressure_scan_interval_ms, 2_000);
         assert_eq!(p.persistence_scans, 2);
         assert_eq!(p.min_process_age_ms, 600_000);
-        assert_eq!(p.runaway_cpu_pct, 100.0);
-        assert_eq!(p.runaway_sustained_scans, 3);
         assert_eq!(p.max_auto_terminations, 5);
         assert_eq!(p.rate_window_ms, 600_000);
         assert_eq!(p.grace_ms, 3_000);
@@ -149,20 +147,11 @@ fn for_level_common_defaults() {
 #[test]
 fn for_level_flags() {
     let n = GuardPolicy::for_level(AutoLevel::NotifyOnly);
-    assert_eq!(
-        (n.min_confidence, n.auto_demote, n.pressure_largest_first),
-        (Confidence::Confirmed, false, false)
-    );
+    assert_eq!(n.min_confidence, Confidence::Confirmed);
     let s = GuardPolicy::for_level(AutoLevel::Safe);
-    assert_eq!(
-        (s.min_confidence, s.auto_demote, s.pressure_largest_first),
-        (Confidence::Confirmed, true, false)
-    );
+    assert_eq!(s.min_confidence, Confidence::Confirmed);
     let a = GuardPolicy::for_level(AutoLevel::Aggressive);
-    assert_eq!(
-        (a.min_confidence, a.auto_demote, a.pressure_largest_first),
-        (Confidence::Likely, true, true)
-    );
+    assert_eq!(a.min_confidence, Confidence::Likely);
 }
 
 #[test]
@@ -271,7 +260,15 @@ fn guard_policy_roundtrip_and_shape() {
     assert_eq!(v["min_confidence"], "confirmed");
     assert_eq!(v["auto_terminate_kinds"][0], "mcp_server");
     assert_eq!(v["notify_only_kinds"][4], "tunnel");
-    assert_eq!(v.as_object().unwrap().len(), 23);
+    assert_eq!(v.as_object().unwrap().len(), 19);
+    for gone in [
+        "auto_demote",
+        "pressure_largest_first",
+        "runaway_cpu_pct",
+        "runaway_sustained_scans",
+    ] {
+        assert!(v.get(gone).is_none(), "{gone}");
+    }
 }
 
 #[test]

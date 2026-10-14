@@ -34,10 +34,6 @@ impl AutoLevel {
 pub struct GuardPolicy {
     pub level: AutoLevel,
     pub min_confidence: Confidence,
-    /// W4 GUARD 커밋 뒤 CORE 통합 단계에서 제거.
-    pub auto_demote: bool,
-    /// 압력 4(위험)이면 회수량 큰 것부터. W4 GUARD 커밋 뒤 CORE 통합 단계에서 제거.
-    pub pressure_largest_first: bool,
     pub scan_interval_ms: u32,
     /// memory.pressure_level >= 2일 때.
     pub pressure_scan_interval_ms: u32,
@@ -46,10 +42,6 @@ pub struct GuardPolicy {
     pub min_process_age_ms: u64,
     pub auto_terminate_kinds: Vec<Kind>,
     pub notify_only_kinds: Vec<Kind>,
-    /// 코어 1개 = 100. 비교는 `>=`. W4 GUARD 커밋 뒤 CORE 통합 단계에서 제거.
-    pub runaway_cpu_pct: f32,
-    /// W4 GUARD 커밋 뒤 CORE 통합 단계에서 제거.
-    pub runaway_sustained_scans: u32,
     /// `rate_window_ms` 안 자동 종료 "시도" 수 상한.
     pub max_auto_terminations: u32,
     pub rate_window_ms: u64,
@@ -98,25 +90,15 @@ const AGGRESSIVE_EXTRA_KINDS: [Kind; 6] = [
 impl GuardPolicy {
     /// 수준별 기본값(계약 W2 확정본의 표). System·AppHelper·GuiApp·AgentCli·Other는 어느 목록에도 없다.
     pub fn for_level(level: AutoLevel) -> GuardPolicy {
-        let (min_confidence, auto_demote, pressure_largest_first, auto, notify) = match level {
-            AutoLevel::NotifyOnly => (
-                Confidence::Confirmed,
-                false,
-                false,
-                Vec::new(),
-                NOTIFY_KINDS.to_vec(),
-            ),
+        let (min_confidence, auto, notify) = match level {
+            AutoLevel::NotifyOnly => (Confidence::Confirmed, Vec::new(), NOTIFY_KINDS.to_vec()),
             AutoLevel::Safe => (
                 Confidence::Confirmed,
-                true,
-                false,
                 SAFE_AUTO_KINDS.to_vec(),
                 NOTIFY_KINDS.to_vec(),
             ),
             AutoLevel::Aggressive => (
                 Confidence::Likely,
-                true,
-                true,
                 SAFE_AUTO_KINDS
                     .iter()
                     .chain(AGGRESSIVE_EXTRA_KINDS.iter())
@@ -128,16 +110,12 @@ impl GuardPolicy {
         GuardPolicy {
             level,
             min_confidence,
-            auto_demote,
-            pressure_largest_first,
             scan_interval_ms: 5_000,
             pressure_scan_interval_ms: 2_000,
             persistence_scans: 2,
             min_process_age_ms: 600_000,
             auto_terminate_kinds: auto,
             notify_only_kinds: notify,
-            runaway_cpu_pct: 100.0,
-            runaway_sustained_scans: 3,
             max_auto_terminations: 5,
             rate_window_ms: 600_000,
             grace_ms: 3_000,
