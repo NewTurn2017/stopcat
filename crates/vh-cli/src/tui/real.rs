@@ -4,8 +4,10 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::TryRecvError;
+#[cfg(debug_assertions)]
 use std::time::Duration;
 
+#[cfg(debug_assertions)]
 use crossterm::event::Event;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
