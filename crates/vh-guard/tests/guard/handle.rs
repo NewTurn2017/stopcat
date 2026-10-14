@@ -1,10 +1,12 @@
 //! GUARD_5 스레드·손잡이. 기다림은 모두 채널 recv_timeout(상한 10초)로, 고정 sleep 없음.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use vh_act::PlanOrigin;
 use vh_guard::fake::*;
-use vh_guard::{AutoLevel, GuardCommand, GuardEventKind, GuardHandle, GuardUpdate, UpdateReceiver};
+use vh_guard::{
+    AutoLevel, GuardCommand, GuardEvent, GuardEventKind, GuardHandle, GuardUpdate, UpdateReceiver,
+};
 use vh_model::*;
 
 use crate::common::*;
@@ -13,6 +15,26 @@ const WAIT: Duration = Duration::from_secs(10);
 
 fn next(rx: &UpdateReceiver) -> GuardUpdate {
     rx.recv_timeout(WAIT).expect("10초 안에 GuardUpdate")
+}
+
+/// `done`이 참이 될 때까지 갱신을 받는다(전체 상한 10초). 그동안 받은 이벤트를 모두 모아 마지막 갱신과 함께 돌려준다.
+/// 스레드의 타이머 스캔 갱신이 사이에 끼어도 이벤트를 잃지 않는다(우편함이 못 받은 갱신을 합치는 것과 같은 뜻).
+fn next_until(
+    rx: &UpdateReceiver,
+    done: impl Fn(&[GuardEvent], &GuardUpdate) -> bool,
+) -> (Vec<GuardEvent>, GuardUpdate) {
+    let deadline = Instant::now() + WAIT;
+    let mut events = Vec::new();
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        let u = rx
+            .recv_timeout(left)
+            .expect("10초 안에 조건을 만족하는 GuardUpdate");
+        events.extend(u.new_events.iter().cloned());
+        if done(&events, &u) {
+            return (events, u);
+        }
+    }
 }
 
 fn backend(scene: &Scene) -> (FakeGuardBackend, Probe, FakeClock) {
@@ -30,10 +52,11 @@ fn demoted_scene() -> (Scene, ProcRef) {
 }
 
 /// 첫 갱신을 받아 201을 화면 직접 낮추기(RunPlan, Pointed)로 낮춘다(W4: 자동 낮추기 없음).
-fn drive_to_demote(h: &GuardHandle, rx: &UpdateReceiver, clock: &FakeClock) -> GuardUpdate {
+/// 가짜 시계를 밀지 않는다: 밀면 다음 스캔 시각이 지나 스레드가 곧바로 타이머 스캔을 하고, 그 갱신이 뒤 단언의
+/// '다음 갱신'으로 끼어든다.
+fn drive_to_demote(h: &GuardHandle, rx: &UpdateReceiver) -> GuardUpdate {
     let first = next(rx);
     assert_eq!(first.status.scan_seq, 1);
-    clock.advance(5000);
     let r = ProcRef {
         pid: 201,
         start_time_unix_ms: OLD,
@@ -93,9 +116,9 @@ fn scan_now_triggers_scan_and_commands_return_status_updates() {
 #[test]
 fn shutdown_restores_demoted_joins_and_then_send_fails() {
     let (sc, r) = demoted_scene();
-    let (be, probe, clock) = backend(&sc);
+    let (be, probe, _clock) = backend(&sc);
     let (h, rx) = GuardHandle::spawn(safe(), be);
-    drive_to_demote(&h, &rx, &clock);
+    drive_to_demote(&h, &rx);
     assert_eq!(probe.log.demoted(), vec![201]);
     let report = h.shutdown();
     assert_eq!(report.undemoted, vec![r]);
@@ -114,9 +137,9 @@ fn shutdown_restores_demoted_joins_and_then_send_fails() {
 #[test]
 fn drop_without_shutdown_still_restores() {
     let (sc, _r) = demoted_scene();
-    let (be, probe, clock) = backend(&sc);
+    let (be, probe, _clock) = backend(&sc);
     let (h, rx) = GuardHandle::spawn(safe(), be);
-    drive_to_demote(&h, &rx, &clock);
+    drive_to_demote(&h, &rx);
     drop(h);
     assert_eq!(probe.log.undemoted(), vec![201]);
     assert!(
@@ -129,9 +152,9 @@ fn drop_without_shutdown_still_restores() {
 #[test]
 fn receiver_dropped_makes_thread_restore_and_exit() {
     let (sc, _r) = demoted_scene();
-    let (be, probe, clock) = backend(&sc);
+    let (be, probe, _clock) = backend(&sc);
     let (h, rx) = GuardHandle::spawn(safe(), be);
-    drive_to_demote(&h, &rx, &clock);
+    drive_to_demote(&h, &rx);
     drop(rx);
     h.scan_now().unwrap();
     let report = h.shutdown();
@@ -142,19 +165,30 @@ fn receiver_dropped_makes_thread_restore_and_exit() {
 #[test]
 fn scan_panic_becomes_scan_error_thread_survives_and_restores_on_shutdown() {
     let (sc, _r) = demoted_scene();
-    let (be, probe, clock) = backend(&sc);
+    let (be, probe, _clock) = backend(&sc);
     let (h, rx) = GuardHandle::spawn(safe(), be);
-    drive_to_demote(&h, &rx, &clock);
+    drive_to_demote(&h, &rx);
     probe.set_collect_panic(true);
     h.scan_now().unwrap();
-    let u = next(&rx);
-    assert_eq!(kinds(&u.new_events), vec![GuardEventKind::ScanError]);
-    assert!(u.new_events[0].detail_ko.contains("패닉"));
-    assert_eq!(u.status.scan_error_streak, 1);
+    let (events, u) = next_until(&rx, |ev, _| {
+        ev.iter().any(|e| e.kind == GuardEventKind::ScanError)
+    });
+    assert!(
+        events.iter().all(|e| e.kind == GuardEventKind::ScanError),
+        "{:?}",
+        kinds(&events)
+    );
+    assert!(events.iter().all(|e| e.detail_ko.contains("패닉")));
+    assert_eq!(
+        u.status.scan_error_streak as usize,
+        events.len(),
+        "패닉 스캔 수만큼 연속 오류"
+    );
     assert!(h.is_alive());
     probe.set_collect_panic(false);
     h.scan_now().unwrap();
-    assert_eq!(next(&rx).status.scan_error_streak, 0);
+    let (_, u) = next_until(&rx, |_, u| u.status.scan_error_streak == 0);
+    assert_eq!(u.status.scan_error_streak, 0);
     let report = h.shutdown();
     assert_eq!(report.undemoted.len(), 1);
     assert_eq!(probe.log.undemoted(), vec![201]);

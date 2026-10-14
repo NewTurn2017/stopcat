@@ -86,7 +86,7 @@ impl Scene {
         r
     }
 
-    /// Finding 없이 프로세스만(폭주 테스트용).
+    /// Finding 없이 프로세스만(CPU 사용·직접 낮추기 테스트용).
     pub fn plain(&mut self, pid: i32, kind: Kind, start: u64) -> ProcRef {
         let p = proc_(pid, 1, UID, start, &format!("p{pid}"));
         let r = pref(&p);

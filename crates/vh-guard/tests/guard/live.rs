@@ -175,7 +175,7 @@ fn live_demote_then_undo_and_shutdown_restore_own_busy_child() {
     }
     assert!(
         e.status().demoted.is_empty(),
-        "다시 폭주해도 자동으로는 낮추지 않음"
+        "CPU를 다시 많이 써도 자동으로는 낮추지 않음"
     );
     assert_eq!(task_priority(child.r.pid).unwrap(), p0);
     demote_by_hand(&mut e, &last.expect("갱신"), child.r);
