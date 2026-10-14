@@ -392,7 +392,7 @@ fn manual_run_plan_does_not_count_and_its_demote_is_restored_at_shutdown() {
     let d = sc.plain(202, Kind::DevServer, OLD);
     sc.findings.push(finding(
         "run:202",
-        FindingKind::Runaway,
+        FindingKind::HighCpu,
         Confidence::Possible,
         vec![d],
         Suggestion::Demote,

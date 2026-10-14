@@ -316,7 +316,7 @@ fn stopped_devserver() {
 #[test]
 fn runaway_cpu() {
     let (_, r) = run("runaway_cpu");
-    let f = of_kind(&r, FindingKind::Runaway);
+    let f = of_kind(&r, FindingKind::HighCpu);
     assert_eq!(f.len(), 1, "{f:#?}");
     assert_eq!(f[0].targets[0].pid, 1500);
     assert_eq!(f[0].confidence, Confidence::Possible);

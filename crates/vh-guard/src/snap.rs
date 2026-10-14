@@ -86,6 +86,9 @@ pub fn bare_report(taken_at_unix_ms: u64, classified: Vec<Classified>) -> Report
         totals: Totals {
             reclaimable_confirmed_bytes: 0,
             reclaimable_likely_bytes: 0,
+            unneeded_bytes: 0,
+            check_bytes: 0,
+            manual_bytes: 0,
         },
     }
 }

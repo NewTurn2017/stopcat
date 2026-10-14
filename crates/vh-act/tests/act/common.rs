@@ -50,6 +50,10 @@ pub fn proc_(pid: i32, ppid: i32, uid: u32, start: u64, exe: Option<&str>) -> Pr
         threads: None,
         nice: None,
         translated: false,
+        tcp: None,
+        disk_read_bytes: None,
+        disk_written_bytes: None,
+        disk_io_delta_bytes: None,
     }
 }
 
@@ -128,6 +132,7 @@ pub fn classified(target: ProcRef, kind: Kind) -> Classified {
         owner_source: None,
         owner_label_ko: None,
         owner_alive: None,
+        usage: Usage::default(),
     }
 }
 
@@ -149,6 +154,7 @@ pub fn finding(
         reclaim_bytes: 0,
         descendant_count: 0,
         suggestion,
+        section: Section::Check,
     }
 }
 
@@ -168,6 +174,9 @@ pub fn report(classified: Vec<Classified>, findings: Vec<Finding>) -> Report {
         totals: Totals {
             reclaimable_confirmed_bytes: 0,
             reclaimable_likely_bytes: 0,
+            unneeded_bytes: 0,
+            check_bytes: 0,
+            manual_bytes: 0,
         },
     }
 }

@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 
 use vh_model::{
     Classified, Confidence, ExeOrigin, Finding, FindingKind, GuardPolicy, Kind, PendingAction,
-    Proc, ProcRef, ProcStatus, Report, Snapshot, Step, Suggestion, exe_origin,
+    PendingWait, Proc, ProcRef, ProcStatus, Report, Snapshot, Step, Suggestion, exe_origin,
 };
 
 use crate::cpu::next_scan_interval_ms;
@@ -120,7 +120,7 @@ impl<'a> Index<'a> {
         let runaway_ids = r
             .findings
             .iter()
-            .filter(|f| f.kind == FindingKind::Runaway)
+            .filter(|f| f.kind == FindingKind::HighCpu)
             .flat_map(|f| f.targets.iter().map(move |t| (*t, f.id.as_str())))
             .collect();
         Index {
@@ -326,6 +326,7 @@ fn decide_terminations(
                     seen_scans: 0,
                     needed_scans: policy.persistence_scans,
                     eta_ms: Some(policy.min_process_age_ms - age),
+                    wait: PendingWait::Confirming,
                 });
                 continue;
             }
@@ -367,6 +368,7 @@ fn decide_terminations(
                         u64::from(policy.persistence_scans - seen)
                             * u64::from(d.next_scan_interval_ms),
                     ),
+                    wait: PendingWait::Confirming,
                 });
                 continue;
             }
@@ -448,6 +450,7 @@ fn young_orphan_pending(
         seen_scans: 0,
         needed_scans: policy.persistence_scans,
         eta_ms: Some(policy.min_process_age_ms - age),
+        wait: PendingWait::Confirming,
     })
 }
 
@@ -587,6 +590,7 @@ fn decide_demotes(
                     u64::from(policy.runaway_sustained_scans - seen)
                         * u64::from(d.next_scan_interval_ms),
                 ),
+                wait: PendingWait::Confirming,
             });
             continue;
         }

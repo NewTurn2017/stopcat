@@ -79,6 +79,10 @@ impl B {
             threads: Some(4),
             nice: Some(0),
             translated: false,
+            tcp: None,
+            disk_read_bytes: None,
+            disk_written_bytes: None,
+            disk_io_delta_bytes: None,
         });
         pid
     }
@@ -133,6 +137,10 @@ pub fn synth_snapshot(n: usize, seed: u64) -> Snapshot {
         threads: Some(4),
         nice: None,
         translated: false,
+        tcp: None,
+        disk_read_bytes: None,
+        disk_written_bytes: None,
+        disk_io_delta_bytes: None,
     });
     let projects: Vec<String> = (0..50).map(|k| format!("{HOME_DIR}dev/p{k}")).collect();
     let mut roots = BTreeMap::new();

@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use vh_model::{
-    Confidence, ExeOrigin, Finding, FindingKind, Kind, ProcRef, ProcStatus, Suggestion,
+    Confidence, ExeOrigin, Finding, FindingKind, Kind, ProcRef, ProcStatus, Section, Suggestion,
 };
 
 use crate::ctx::{Ctx, DeadWhy};
@@ -20,7 +20,7 @@ pub(crate) fn kind_str(k: FindingKind) -> &'static str {
         FindingKind::Duplicate => "duplicate",
         FindingKind::Zombie => "zombie",
         FindingKind::Stopped => "stopped",
-        FindingKind::Runaway => "runaway",
+        FindingKind::HighCpu => "runaway",
         FindingKind::HeavyProcess => "heavy_process",
         FindingKind::HeavyAgentSession => "heavy_agent_session",
         FindingKind::HeadlessBrowserLeftover => "headless_browser_leftover",
@@ -42,7 +42,7 @@ pub(crate) fn kind_order(k: FindingKind) -> u8 {
         FindingKind::Duplicate => 6,
         FindingKind::Stopped => 7,
         FindingKind::Zombie => 8,
-        FindingKind::Runaway => 9,
+        FindingKind::HighCpu => 9,
         FindingKind::HeavyProcess => 10,
         FindingKind::ExposedListener => 11,
         FindingKind::KnownPortConflict => 12,
@@ -101,7 +101,7 @@ pub(crate) fn build(c: &Ctx, d: Draft) -> Finding {
         d.kind,
         FindingKind::KnownPortConflict
             | FindingKind::ExposedListener
-            | FindingKind::Runaway
+            | FindingKind::HighCpu
             | FindingKind::MemoryPressure
             | FindingKind::LimitNearing
     ) {
@@ -121,6 +121,7 @@ pub(crate) fn build(c: &Ctx, d: Draft) -> Finding {
         reclaim_bytes: reclaim,
         descendant_count: desc_count,
         suggestion: d.suggestion,
+        section: Section::Check,
     }
 }
 
@@ -630,6 +631,7 @@ fn zombies(c: &Ctx) -> Vec<Finding> {
                 reclaim_bytes: 0,
                 descendant_count: 0,
                 suggestion: Suggestion::RestartParent { parent: pr },
+                section: Section::Check,
             }
         })
         .collect()
@@ -886,8 +888,8 @@ fn runaways(c: &Ctx) -> Vec<Finding> {
         out.push(build(
             c,
             Draft {
-                id: fid(FindingKind::Runaway, c.pref(i)),
-                kind: FindingKind::Runaway,
+                id: fid(FindingKind::HighCpu, c.pref(i)),
+                kind: FindingKind::HighCpu,
                 confidence: Confidence::Possible,
                 targets: vec![i],
                 with_desc: false,

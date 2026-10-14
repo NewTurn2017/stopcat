@@ -75,7 +75,7 @@ fn json_usage_error_goes_to_stdout() {
     assert_eq!(ran.code, 1);
     let v: serde_json::Value = serde_json::from_str(ran.out.trim()).unwrap();
     assert_eq!(v["error"]["code"], "usage");
-    assert_eq!(v["schema_version"], 1);
+    assert_eq!(v["schema_version"], 2);
 }
 
 #[test]

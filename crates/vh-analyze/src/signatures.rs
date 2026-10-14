@@ -1274,6 +1274,10 @@ mod tests {
             threads: None,
             nice: None,
             translated: false,
+            tcp: None,
+            disk_read_bytes: None,
+            disk_written_bytes: None,
+            disk_io_delta_bytes: None,
         };
         let f = features(&p);
         let c = classify(&p, &f, H);

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use vh_act::{Policy, PriorityTarget, Selection};
 use vh_model::{
     ActionOutcome, ActionPlan, AutoLevel, DemotedProc, FinalState, GuardEvent, GuardEventKind,
-    GuardPolicy, GuardStatus, PendingAction, ProcRef, Report, Snapshot, Step,
+    GuardPolicy, GuardStatus, HealthLevel, PendingAction, ProcRef, Report, Snapshot, Step,
 };
 
 use crate::backend::GuardBackend;
@@ -115,6 +115,13 @@ impl<B: GuardBackend> Engine<B> {
                 })
                 .collect(),
             pending: self.pending.clone(),
+            health: HealthLevel::Ok,
+            health_forced: None,
+            unstable: false,
+            unstable_reasons: Vec::new(),
+            unstable_since_unix_ms: None,
+            settle_until_unix_ms: None,
+            swap_delta_bytes: None,
         }
     }
 

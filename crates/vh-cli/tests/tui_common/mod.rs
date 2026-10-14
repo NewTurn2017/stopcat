@@ -30,6 +30,13 @@ pub fn status(level: AutoLevel) -> GuardStatus {
         next_scan_at_unix_ms: T0 + 5_000,
         demoted: vec![],
         pending: vec![],
+        health: HealthLevel::Ok,
+        health_forced: None,
+        unstable: false,
+        unstable_reasons: Vec::new(),
+        unstable_since_unix_ms: None,
+        settle_until_unix_ms: None,
+        swap_delta_bytes: None,
     }
 }
 
@@ -52,6 +59,7 @@ pub fn codex_pending(s: &Snapshot, rep: &Report) -> PendingAction {
         seen_scans: 1,
         needed_scans: 2,
         eta_ms: Some(5_000),
+        wait: PendingWait::Confirming,
     }
 }
 

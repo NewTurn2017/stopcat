@@ -193,6 +193,10 @@ pub fn collect(opts: &CollectOptions) -> Snapshot {
             threads: None,
             nice: None,
             translated: r.flag & ffi::P_TRANSLATED != 0,
+            tcp: None,
+            disk_read_bytes: None,
+            disk_written_bytes: None,
+            disk_io_delta_bytes: None,
         };
         let mut sample = None;
         if !zombie && r.pid > 0 {

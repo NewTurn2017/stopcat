@@ -44,6 +44,10 @@ fn proc_(pid: i32, ppid: i32) -> Proc {
         threads: Some(11),
         nice: Some(0),
         translated: false,
+        tcp: None,
+        disk_read_bytes: None,
+        disk_written_bytes: None,
+        disk_io_delta_bytes: None,
     }
 }
 
@@ -182,6 +186,7 @@ fn roundtrip_report() {
             reclaim_bytes: 1_000_000_000,
             descendant_count: 29,
             suggestion,
+            section: Section::Check,
         })
         .collect();
     let report = Report {
@@ -203,6 +208,7 @@ fn roundtrip_report() {
             owner_source: Some("env:CLAUDE_PID".to_string()),
             owner_label_ko: Some("Claude 세션".to_string()),
             owner_alive: Some(false),
+            usage: Usage::default(),
         }],
         groups: vec![Group {
             id: "project:~/dev/shop".to_string(),
@@ -224,6 +230,9 @@ fn roundtrip_report() {
         totals: Totals {
             reclaimable_confirmed_bytes: 1,
             reclaimable_likely_bytes: 2,
+            unneeded_bytes: 0,
+            check_bytes: 0,
+            manual_bytes: 0,
         },
     };
     roundtrip(&report);
@@ -367,8 +376,109 @@ fn confidence_rank_and_meets() {
 
 #[test]
 fn schema_and_allowlist_constants() {
-    assert_eq!(SCHEMA_VERSION, 1);
+    assert_eq!(SCHEMA_VERSION, 2);
     assert_eq!(ENV_ALLOWLIST.len(), 20);
     assert!(ENV_ALLOWLIST.contains(&"SENPI_PY_KERNEL_PARENT_PID"));
     assert_eq!(REDACTED, "<가림>");
+}
+
+fn js<T: Serialize>(v: &T) -> String {
+    serde_json::to_string(v).expect("serialize")
+}
+
+#[test]
+fn serde_names_w4() {
+    assert_eq!(SCHEMA_VERSION, 2);
+    assert_eq!(js(&FindingKind::HighCpu), "\"high_cpu\"");
+    let sections = [
+        (Section::Unneeded, "unneeded"),
+        (Section::Check, "check"),
+        (Section::Working, "working"),
+        (Section::Manual, "manual"),
+        (Section::Info, "info"),
+    ];
+    for (s, name) in sections {
+        assert_eq!(js(&s), format!("\"{name}\""));
+        roundtrip(&s);
+    }
+    assert_eq!(js(&UsageState::Unknown), "\"unknown\"");
+    assert_eq!(js(&OwnerState::User), "\"user\"");
+    assert_eq!(
+        js(&UsageReason::PeerOutsideSubtree),
+        "\"peer_outside_subtree\""
+    );
+    assert_eq!(js(&UsageReason::LifetimeCpuLow), "\"lifetime_cpu_low\"");
+    let usage = Usage {
+        state: UsageState::Active,
+        owner: OwnerState::Ended,
+        reasons: vec![UsageReason::CpuActive, UsageReason::NoPeers],
+        subtree_procs: 3,
+        subtree_cpu_pct: Some(2.5),
+        subtree_disk_delta_bytes: Some(4096),
+        outside_peer_count: 1,
+    };
+    roundtrip(&usage);
+    let v = serde_json::to_value(&usage).unwrap();
+    assert_eq!(v["reasons"][0], "cpu_active");
+    assert_eq!(v.as_object().unwrap().len(), 7);
+    let tcp = TcpSummary {
+        established: 3,
+        loopback: 2,
+        external: 1,
+        unresolved: 0,
+        peer_pids: vec![101, 102],
+        peer_pids_truncated: false,
+    };
+    roundtrip(&tcp);
+    let tv = serde_json::to_value(&tcp).unwrap();
+    assert_eq!(tv.as_object().unwrap().len(), 6);
+    assert_eq!(MAX_PEER_PIDS, 64);
+    let mut p = proc_(100, 1);
+    p.tcp = Some(tcp);
+    p.disk_read_bytes = Some(1);
+    p.disk_written_bytes = Some(2);
+    p.disk_io_delta_bytes = Some(3);
+    roundtrip(&p);
+}
+
+#[test]
+fn v1_proc_json_still_parses() {
+    let mut v = serde_json::to_value(proc_(100, 1)).unwrap();
+    let o = v.as_object_mut().unwrap();
+    for k in [
+        "tcp",
+        "disk_read_bytes",
+        "disk_written_bytes",
+        "disk_io_delta_bytes",
+    ] {
+        assert!(o.remove(k).is_some(), "{k}");
+    }
+    let back: Proc = serde_json::from_value(v).expect("v1 Proc JSON");
+    assert_eq!(back.tcp, None);
+    assert_eq!(back.disk_read_bytes, None);
+    assert_eq!(back.disk_written_bytes, None);
+    assert_eq!(back.disk_io_delta_bytes, None);
+}
+
+fn usage_with(state: UsageState) -> Usage {
+    Usage {
+        state,
+        ..Usage::default()
+    }
+}
+
+#[test]
+fn in_use_active_is_true() {
+    assert!(usage_with(UsageState::Active).in_use());
+}
+
+#[test]
+fn in_use_unknown_is_true() {
+    assert!(usage_with(UsageState::Unknown).in_use());
+    assert!(Usage::default().in_use());
+}
+
+#[test]
+fn in_use_idle_is_false() {
+    assert!(!usage_with(UsageState::Idle).in_use());
 }

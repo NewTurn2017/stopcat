@@ -54,6 +54,10 @@ fn proc_(pid: i32, ppid: i32, name: &str, exe: &str, fp: u64, age: u64) -> Proc 
         threads: Some(4),
         nice: Some(0),
         translated: false,
+        tcp: None,
+        disk_read_bytes: None,
+        disk_written_bytes: None,
+        disk_io_delta_bytes: None,
     }
 }
 
@@ -274,6 +278,7 @@ fn cls(s: &Snapshot, pid: i32, kind: Kind, label: &str, project: Option<&str>) -
         owner_source: None,
         owner_label_ko: None,
         owner_alive: None,
+        usage: Usage::default(),
     }
 }
 
@@ -303,6 +308,7 @@ fn finding(
         reclaim_bytes: reclaim,
         descendant_count: desc,
         suggestion,
+        section: Section::Check,
     }
 }
 
@@ -559,6 +565,9 @@ pub fn report(s: &Snapshot) -> Report {
         totals: Totals {
             reclaimable_confirmed_bytes: GIB,
             reclaimable_likely_bytes: 7 * GIB + GIB / 2 + 412 * MIB + 380 * MIB,
+            unneeded_bytes: 0,
+            check_bytes: 0,
+            manual_bytes: 0,
         },
     }
 }
@@ -579,6 +588,9 @@ pub fn report_empty() -> Report {
         totals: Totals {
             reclaimable_confirmed_bytes: 0,
             reclaimable_likely_bytes: 0,
+            unneeded_bytes: 0,
+            check_bytes: 0,
+            manual_bytes: 0,
         },
     }
 }

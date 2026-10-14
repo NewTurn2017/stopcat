@@ -24,7 +24,7 @@ pub(crate) fn bucket(f: &Finding, target_kind: Option<Kind>) -> Option<Bucket> {
         Some(Kind::Emulator | Kind::TestTool | Kind::HeadlessBrowser)
     );
     match f.kind {
-        HeavyAgentSession | HeavyProcess | Runaway | LimitNearing => Some(Bucket::Watch),
+        HeavyAgentSession | HeavyProcess | HighCpu | LimitNearing => Some(Bucket::Watch),
         MemoryPressure => None,
         Orphan | LogicalOrphan if leftover_kind => Some(Bucket::Leftover),
         Orphan | LogicalOrphan => Some(Bucket::Orphan),

@@ -39,6 +39,7 @@ fn pending(pid: i32, step: Step, eta_ms: Option<u64>) -> PendingAction {
         seen_scans: 1,
         needed_scans: 2,
         eta_ms,
+        wait: PendingWait::Confirming,
     }
 }
 
@@ -111,6 +112,8 @@ fn guard_event_kind_serde_names() {
         (GuardEventKind::Resumed, "resumed"),
         (GuardEventKind::LevelChanged, "level_changed"),
         (GuardEventKind::ScanError, "scan_error"),
+        (GuardEventKind::Unstable, "unstable"),
+        (GuardEventKind::Stable, "stable"),
     ];
     for (k, name) in table {
         assert_eq!(j(&k), format!("\"{name}\""));
@@ -133,6 +136,13 @@ fn for_level_common_defaults() {
         assert_eq!(p.rate_window_ms, 600_000);
         assert_eq!(p.grace_ms, 3_000);
         assert_eq!(p.notify_min_interval_ms, 30_000);
+        assert_eq!(p.swap_growth_bytes, 1_073_741_824);
+        assert_eq!(p.swap_window_ms, 300_000);
+        assert_eq!(p.swap_min_span_ms, 60_000);
+        assert_eq!(p.settle_ms, 60_000);
+        assert_eq!(p.max_per_round_watch, 1);
+        assert_eq!(p.unstable_notify_cooldown_ms, 600_000);
+        assert_eq!(p.idle_confirm_ms, 120_000);
     }
 }
 
@@ -261,7 +271,7 @@ fn guard_policy_roundtrip_and_shape() {
     assert_eq!(v["min_confidence"], "confirmed");
     assert_eq!(v["auto_terminate_kinds"][0], "mcp_server");
     assert_eq!(v["notify_only_kinds"][4], "tunnel");
-    assert_eq!(v.as_object().unwrap().len(), 16);
+    assert_eq!(v.as_object().unwrap().len(), 23);
 }
 
 #[test]
@@ -330,6 +340,13 @@ fn guard_status_roundtrip() {
             },
         ],
         pending: vec![pending(30, Step::Term, Some(5_000))],
+        health: HealthLevel::Ok,
+        health_forced: None,
+        unstable: false,
+        unstable_reasons: Vec::new(),
+        unstable_since_unix_ms: None,
+        settle_until_unix_ms: None,
+        swap_delta_bytes: None,
     };
     roundtrip(&status);
     let quiet = GuardStatus {
@@ -346,6 +363,13 @@ fn guard_status_roundtrip() {
         next_scan_at_unix_ms: 0,
         demoted: vec![],
         pending: vec![],
+        health: HealthLevel::Ok,
+        health_forced: None,
+        unstable: false,
+        unstable_reasons: Vec::new(),
+        unstable_since_unix_ms: None,
+        settle_until_unix_ms: None,
+        swap_delta_bytes: None,
     };
     roundtrip(&quiet);
     assert_eq!(
@@ -382,4 +406,30 @@ fn vh_config_default_and_shape() {
         first_run_done: true,
         scan_interval_ms: Some(10_000),
     });
+}
+
+#[test]
+fn guard_w4_enum_names_and_pending_wait() {
+    let reasons = [
+        (UnstableReason::HealthWatch, "health_watch"),
+        (UnstableReason::HealthCritical, "health_critical"),
+        (UnstableReason::SwapGrowing, "swap_growing"),
+    ];
+    for (r, name) in reasons {
+        assert_eq!(j(&r), format!("\"{name}\""));
+        roundtrip(&r);
+    }
+    let waits = [
+        (PendingWait::TooYoung, "too_young"),
+        (PendingWait::IdleConfirming, "idle_confirming"),
+        (PendingWait::Confirming, "confirming"),
+        (PendingWait::Settling, "settling"),
+        (PendingWait::RoundLimit, "round_limit"),
+    ];
+    for (w, name) in waits {
+        assert_eq!(j(&w), format!("\"{name}\""));
+        roundtrip(&w);
+    }
+    let v = serde_json::to_value(pending(13, Step::Term, None)).unwrap();
+    assert_eq!(v["wait"], "confirming");
 }

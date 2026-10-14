@@ -92,6 +92,7 @@ fn big(extra: usize) -> (Snapshot, Report) {
             owner_source: None,
             owner_label_ko: None,
             owner_alive: None,
+            usage: Usage::default(),
         });
     }
     (s, rep)
@@ -123,6 +124,13 @@ fn status() -> GuardStatus {
         next_scan_at_unix_ms: T0 + 5_000,
         demoted: vec![],
         pending: vec![],
+        health: HealthLevel::Ok,
+        health_forced: None,
+        unstable: false,
+        unstable_reasons: Vec::new(),
+        unstable_since_unix_ms: None,
+        settle_until_unix_ms: None,
+        swap_delta_bytes: None,
     }
 }
 

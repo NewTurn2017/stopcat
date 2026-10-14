@@ -126,6 +126,36 @@ pub struct Proc {
     pub nice: Option<i32>,
     /// kinfo_proc p_flag & P_TRANSLATED
     pub translated: bool,
+    /// ESTABLISHED TCP 연결 요약. 자기 uid이고 PROC_PIDLISTFDS가 성공한 프로세스만 Some(연결 0개도 Some).
+    /// 남의 uid·좀비·읽기 실패·연결 상한 초과는 None(모름).
+    pub tcp: Option<TcpSummary>,
+    /// rusage v4 ri_diskio_bytesread 누적(마지막 샘플).
+    pub disk_read_bytes: Option<u64>,
+    /// rusage v4 ri_diskio_byteswritten 누적(마지막 샘플).
+    pub disk_written_bytes: Option<u64>,
+    /// `cpu_pct`와 같은 구간 동안 늘어난 읽기+쓰기 바이트. 두 번째 샘플이 없거나
+    /// start_abstime이 바뀌었으면 None. 지킴이는 `cpu_pct`처럼 직전 스캔과 비교해 채운다.
+    pub disk_io_delta_bytes: Option<u64>,
+}
+
+/// `TcpSummary::peer_pids` 상한.
+pub const MAX_PEER_PIDS: usize = 64;
+
+/// 프로세스 한 개의 ESTABLISHED TCP 연결 요약. 외부 상대의 IP·포트는 저장하지 않는다.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TcpSummary {
+    /// ESTABLISHED TCP 소켓 수(같은 소켓을 부모·자식이 함께 쥐면 각자 센다).
+    pub established: u32,
+    /// 그중 상대 주소가 loopback(127/8, ::1, ::ffff:127/104)인 수.
+    pub loopback: u32,
+    /// 상대 주소가 loopback이 아닌 수.
+    pub external: u32,
+    /// loopback인데 같은 스냅샷에서 반대쪽 소켓의 주인을 못 찾은 수(남의 uid 프로세스, 수집 사이 닫힘).
+    pub unresolved: u32,
+    /// loopback 상대 pid(같은 스냅샷 안, 자기 자신 제외, 중복 제거, 오름차순, 최대 `MAX_PEER_PIDS`개).
+    pub peer_pids: Vec<i32>,
+    /// 상대가 `MAX_PEER_PIDS`개를 넘어 잘림. vh-analyze는 잘린 경우 자손 밖 상대가 있다고 본다.
+    pub peer_pids_truncated: bool,
 }
 
 /// 소켓 주소 계열.

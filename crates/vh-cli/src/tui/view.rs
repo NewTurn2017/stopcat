@@ -481,6 +481,8 @@ pub fn event_kind_ko(k: GuardEventKind) -> &'static str {
         GuardEventKind::Resumed => "다시 시작",
         GuardEventKind::LevelChanged => "수준 바꿈",
         GuardEventKind::ScanError => "확인 오류",
+        GuardEventKind::Unstable => "불안정 시작",
+        GuardEventKind::Stable => "정상으로 돌아옴",
     }
 }
 

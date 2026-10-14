@@ -18,6 +18,7 @@ use std::collections::BTreeSet;
 
 use vh_model::{
     Classified, Confidence, Explanation, Report, SCHEMA_VERSION, Snapshot, Suggestion, Totals,
+    Usage,
 };
 
 use crate::ctx::Ctx;
@@ -71,6 +72,9 @@ pub fn analyze(s: &Snapshot) -> Report {
     let totals = Totals {
         reclaimable_confirmed_bytes: confirmed.iter().map(|&i| c.footprint(i)).sum(),
         reclaimable_likely_bytes: likely.difference(&confirmed).map(|&i| c.footprint(i)).sum(),
+        unneeded_bytes: 0,
+        check_bytes: 0,
+        manual_bytes: 0,
     };
 
     let mut order: Vec<usize> = (0..c.procs.len()).collect();
@@ -90,6 +94,7 @@ pub fn analyze(s: &Snapshot) -> Report {
                 owner_source: o.source.map(str::to_string),
                 owner_label_ko: o.label.clone(),
                 owner_alive: o.alive,
+                usage: Usage::default(),
             }
         })
         .collect();

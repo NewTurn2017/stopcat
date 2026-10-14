@@ -3,8 +3,8 @@ use vh_lab::run::{ClsLite, FindingLite, KernelRec, ScanRec};
 use vh_lab::signal::SignalCall;
 use vh_lab::verdict::{self, Records, Verdict};
 use vh_model::{
-    AutoLevel, Confidence, FindingKind, GuardEvent, GuardEventKind, GuardStatus, Kind,
-    PendingAction, ProcRef, Step, Suggestion,
+    AutoLevel, Confidence, FindingKind, GuardEvent, GuardEventKind, GuardStatus, HealthLevel, Kind,
+    PendingAction, PendingWait, ProcRef, Step, Suggestion,
 };
 
 const T0: u64 = 1_800_000_000_000;
@@ -31,6 +31,13 @@ fn status(seq: u64, pending: Vec<PendingAction>, circuit: bool) -> GuardStatus {
         next_scan_at_unix_ms: 0,
         demoted: vec![],
         pending,
+        health: HealthLevel::Ok,
+        health_forced: None,
+        unstable: false,
+        unstable_reasons: Vec::new(),
+        unstable_since_unix_ms: None,
+        settle_until_unix_ms: None,
+        swap_delta_bytes: None,
     }
 }
 
@@ -57,6 +64,7 @@ fn pend(t: ProcRef, seen: u32, step: Step) -> PendingAction {
         seen_scans: seen,
         needed_scans: 2,
         eta_ms: Some(5_000),
+        wait: PendingWait::Confirming,
     }
 }
 

@@ -131,6 +131,7 @@ fn rows_independent_of_unrelated_processes() {
             owner_source: None,
             owner_label_ko: None,
             owner_alive: None,
+            usage: Usage::default(),
         });
         big.processes.push(p);
     }

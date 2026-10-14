@@ -12,7 +12,7 @@ use vh_act::{
 };
 use vh_model::{
     ActionOutcome, ActionPlan, Classified, Confidence, Finding, FindingKind, Kind, Proc, ProcRef,
-    ProcStatus, Report, Snapshot, Suggestion,
+    ProcStatus, Report, Section, Snapshot, Suggestion, Usage,
 };
 
 use crate::backend::GuardBackend;
@@ -506,6 +506,10 @@ pub fn proc_(pid: i32, ppid: i32, uid: u32, start_time_unix_ms: u64, name: &str)
         threads: Some(1),
         nice: Some(0),
         translated: false,
+        tcp: None,
+        disk_read_bytes: None,
+        disk_written_bytes: None,
+        disk_io_delta_bytes: None,
     }
 }
 
@@ -532,6 +536,7 @@ pub fn classified(
         owner_source: None,
         owner_label_ko: None,
         owner_alive,
+        usage: Usage::default(),
     }
 }
 
@@ -555,6 +560,7 @@ pub fn finding(
         reclaim_bytes,
         descendant_count: 0,
         suggestion,
+        section: Section::Check,
     }
 }
 

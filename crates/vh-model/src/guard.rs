@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::action::Step;
-use crate::report::{Confidence, Kind, ProcRef};
+use crate::report::{Confidence, HealthLevel, Kind, ProcRef};
 
 /// 지킴이 자동 처리 수준.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -34,8 +34,9 @@ impl AutoLevel {
 pub struct GuardPolicy {
     pub level: AutoLevel,
     pub min_confidence: Confidence,
+    /// W4 GUARD 커밋 뒤 CORE 통합 단계에서 제거.
     pub auto_demote: bool,
-    /// 압력 4(위험)이면 회수량 큰 것부터.
+    /// 압력 4(위험)이면 회수량 큰 것부터. W4 GUARD 커밋 뒤 CORE 통합 단계에서 제거.
     pub pressure_largest_first: bool,
     pub scan_interval_ms: u32,
     /// memory.pressure_level >= 2일 때.
@@ -45,14 +46,27 @@ pub struct GuardPolicy {
     pub min_process_age_ms: u64,
     pub auto_terminate_kinds: Vec<Kind>,
     pub notify_only_kinds: Vec<Kind>,
-    /// 코어 1개 = 100. 비교는 `>=`.
+    /// 코어 1개 = 100. 비교는 `>=`. W4 GUARD 커밋 뒤 CORE 통합 단계에서 제거.
     pub runaway_cpu_pct: f32,
+    /// W4 GUARD 커밋 뒤 CORE 통합 단계에서 제거.
     pub runaway_sustained_scans: u32,
     /// `rate_window_ms` 안 자동 종료 "시도" 수 상한.
     pub max_auto_terminations: u32,
     pub rate_window_ms: u64,
     pub grace_ms: u32,
     pub notify_min_interval_ms: u64,
+    /// `swap_window_ms` 안에서 스왑이 이만큼 늘면 불안정(스왑 증가).
+    pub swap_growth_bytes: u64,
+    pub swap_window_ms: u64,
+    /// 스왑 이력이 이보다 짧으면 증가를 판단하지 않는다.
+    pub swap_min_span_ms: u64,
+    /// 자동 정리 뒤 결과가 드러날 때까지 기다리는 시간.
+    pub settle_ms: u64,
+    /// 주의(Watch) 단계에서 한 회차에 정리하는 최대 개수.
+    pub max_per_round_watch: u32,
+    pub unstable_notify_cooldown_ms: u64,
+    /// 지킴이가 직접 본 '안 쓰고 있음'이 이만큼 연속이어야 자동 후보가 된다.
+    pub idle_confirm_ms: u64,
 }
 
 const SAFE_AUTO_KINDS: [Kind; 6] = [
@@ -128,6 +142,13 @@ impl GuardPolicy {
             rate_window_ms: 600_000,
             grace_ms: 3_000,
             notify_min_interval_ms: 30_000,
+            swap_growth_bytes: 1_073_741_824,
+            swap_window_ms: 300_000,
+            swap_min_span_ms: 60_000,
+            settle_ms: 60_000,
+            max_per_round_watch: 1,
+            unstable_notify_cooldown_ms: 600_000,
+            idle_confirm_ms: 120_000,
         }
     }
 }
@@ -148,6 +169,10 @@ pub enum GuardEventKind {
     Resumed,
     LevelChanged,
     ScanError,
+    /// 불안정 시작.
+    Unstable,
+    /// 정상 복귀.
+    Stable,
 }
 
 /// 자동 처리 기록 한 건.
@@ -164,6 +189,26 @@ pub struct GuardEvent {
     pub reclaimed_bytes: u64,
 }
 
+/// 지킴이가 불안정으로 보는 이유.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnstableReason {
+    HealthWatch,
+    HealthCritical,
+    SwapGrowing,
+}
+
+/// 자동 예정 대상이 기다리는 것.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PendingWait {
+    TooYoung,
+    IdleConfirming,
+    Confirming,
+    Settling,
+    RoundLimit,
+}
+
 /// 자동 조치 조건을 기다리는 대상(화면의 "자동 예정 n/N").
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PendingAction {
@@ -177,6 +222,7 @@ pub struct PendingAction {
     pub needed_scans: u32,
     /// 조건이 다 차기까지 남은 대략 시간.
     pub eta_ms: Option<u64>,
+    pub wait: PendingWait,
 }
 
 /// 이 세션이 우선순위를 낮춘 대상(종료 때 되돌림).
@@ -205,6 +251,16 @@ pub struct GuardStatus {
     pub next_scan_at_unix_ms: u64,
     pub demoted: Vec<DemotedProc>,
     pub pending: Vec<PendingAction>,
+    /// 지킴이가 쓴 유효 건강(강제 포함).
+    pub health: HealthLevel,
+    /// Some = 시험용 강제 건강.
+    pub health_forced: Option<HealthLevel>,
+    pub unstable: bool,
+    pub unstable_reasons: Vec<UnstableReason>,
+    pub unstable_since_unix_ms: Option<u64>,
+    pub settle_until_unix_ms: Option<u64>,
+    /// 스왑 창 안 최신 − 최솟값. 이력이 `swap_min_span_ms` 미만이면 None.
+    pub swap_delta_bytes: Option<i64>,
 }
 
 /// `<state_dir>/config.json`.
