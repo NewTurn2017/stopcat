@@ -1,49 +1,74 @@
-[한국어](README.md) · [English](README.en.md)
+<p align="center">
+  <img src="docs/screenshot.png" alt="StopCat report screen" width="820">
+</p>
 
-# StopCat — a Mac cleanup tool that stops only what you don't need
+<h1 align="center">StopCat</h1>
 
-When your Mac slows down, StopCat shows "what is running and why" in plain language, and cleans up only after you confirm. While the screen is open, the **guard** (지킴이) reports what is not needed and how much memory you could get back, with evidence, and only cleans up things that are definitely "not needed" when the Mac becomes unstable. It never kills or slows down anything you are using right now.
+<p align="center">
+  <b>A Mac cleanup tool that stops only what you don't need</b><br>
+  It shows what is running and why, and cleans up only after you confirm.
+</p>
 
-When you start servers with AI and run many agents, you pile up ownerless processes, emulators and browsers left behind by finished tests, and ports open to the network. `stopcat` looks at your Mac **by project and AI session** instead of by process ID, and before stopping anything it explains **who started it and why**.
+<p align="center">
+  <a href="https://github.com/NewTurn2017/stopcat/releases/latest"><img src="https://img.shields.io/github/v/release/NewTurn2017/stopcat?style=flat-square&color=ff4d6d&label=release" alt="release"></a>
+  <a href="https://github.com/NewTurn2017/homebrew-tap"><img src="https://img.shields.io/badge/brew-NewTurn2017%2Ftap%2Fstopcat-ff9f43?style=flat-square&logo=homebrew&logoColor=white" alt="homebrew"></a>
+  <img src="https://img.shields.io/badge/macOS-Apple%20silicon%20%C2%B7%20Intel-1f2328?style=flat-square&logo=apple&logoColor=white" alt="macOS">
+  <img src="https://img.shields.io/badge/Rust-1.88%2B-dea584?style=flat-square&logo=rust&logoColor=white" alt="Rust">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-9775fa?style=flat-square" alt="MIT"></a>
+</p>
 
-![StopCat report screen](docs/screenshot.png)
+<p align="center"><a href="README.md">한국어</a> · <b>English</b></p>
 
-> **The user interface is in Korean.** The screen examples below are shown exactly as they appear; the English text explains what they mean.
->
+> **The user interface is in Korean.** Screens are shown exactly as they appear; the English text explains what they mean.
+
+## Why StopCat
+
+When you start servers with AI and run many agents, you pile up ownerless processes, emulators and browsers left behind by finished tests, and ports open to the network. Activity Monitor only shows process IDs, so it is hard to tell what is safe to stop.
+
+`stopcat` looks at your Mac **by project and AI session**, and before stopping anything it explains **who started it and why**. While the screen is open, the **guard** (지킴이) reports what is not needed and how much memory you could get back, with evidence, and only cleans up things that are definitely "not needed" when the Mac becomes unstable. It never kills or slows down anything you are using right now.
+
+## Quick start
+
+```sh
+brew install NewTurn2017/tap/stopcat
+stopcat
+```
+
+- On first run, one screen explains what the guard will do automatically. Enter = Stabilize auto, n = Report only.
+- macOS only (Apple silicon and Intel). No administrator privileges (sudo) are needed, and nothing resident or no login items are installed.
+- Update with `brew upgrade stopcat`, remove with `brew uninstall stopcat`.
+- To install from source without Homebrew, you need Rust 1.88 or later.
+
+```sh
+cargo install --git https://github.com/NewTurn2017/stopcat stopcat-cli
+```
+
+## Features
+
+- **By project and AI session** — groups processes by which project and which Claude or Codex session started them, instead of by process ID.
+- **Evidence first** — every row carries evidence (owner ended, CPU, connections, disk) and a confidence level. Press `w` to follow the whole launch chain.
+- **Nothing stops without confirmation** — always a preview, then `y`. It stops step by step: graceful termination signal → wait 3 seconds → force kill only if still running.
+- **Never touches what you are using** — not even at 100% CPU; AI chat sessions, apps, virtual machines, and databases are never stopped automatically. Sixteen protection rules guard the last step.
+- **The guard** — reports only in normal times, and cleans up only definite items, only as much as needed, when the Mac is unstable. A circuit breaker opens if it tries to stop more than 5 in 10 minutes.
+- **Script- and AI-friendly** — `--plain`, `--json`, and the `why`, `ports`, `fix`, `kill` subcommands work for agents as is.
+- **Everything stays on your Mac** — it keeps an audit log and revive info locally and sends nothing off your Mac.
+
+## A look around
+
+<table>
+  <tr>
+    <td><img src="docs/preview.png" alt="c — clean up all recommendations: preview, then y"></td>
+    <td><img src="docs/first-run.png" alt="First run — choosing the guard level"></td>
+  </tr>
+  <tr>
+    <td align="center">c — clean up all recommendations: preview, then y</td>
+    <td align="center">First run — choosing the guard level</td>
+  </tr>
+</table>
+
 > All screen examples in this document use synthetic data. Real values differ from Mac to Mac.
 >
 > The name is inspired by [RunCat](https://kyome.io/runcat/), the menu bar app whose cat runs faster as your CPU gets busier, but StopCat is an independent project unrelated to RunCat.
-
-## Using stopcat
-
-Just type `stopcat` in a terminal. A full-screen view opens; pick items with the arrow keys and press Enter to clean up.
-
-```
-█▀ ▀█▀ █▀█ █▀█ █▀▀ ▄▀█ ▀█▀  ● 메모리 정상 · 압력 1 · 압축 41GB · 스왑 1.6/2GB
-▄█  █  █▄█ █▀▀ █▄▄ █▀█  █   확보 가능 1.5GB · 확인하면 +8.0GB · 직접 하면 +22GB
- 1 보고 9   2 포트 6   3 자동 처리 기록 0   4 설정             Made by Withgenie
-    대상                   크기  나이   근거                    지킴이
- 필요 없음 3   정리하면 약 1.5GB · c 로 전부 정리
-❯ ○ codex app-server      1.0GB  3일    주인 끝남·CPU 0·연결 0  ◷ 불안정 시 자동
-  ○ headless Chrome (Ch…  380MB  7시간  주인 끝남·CPU 0·연결 0  ◆ 정리 추천
-  ○ npm exec               84MB  3일    주인 끝남·CPU 0·연결 0  ◆ 정리 추천
- 확인 필요 3   쓰고 있는지 확실하지 않아 보고만 · 확인하면 약 8.0GB
-  ○ Android 에뮬레이터 …  7.5GB  3일    주인 끝남·CPU 3%·연결 6 ▲ 확인 필요
-  ○ appium (앱 테스트) …  412MB  2일    주인 있음·안 쓰는 듯    ▲ 확인 필요
-  ○ 테스트 서버 (node) …   96MB  1일    주인 끝남·CPU 0·연결 …  ▲ 확인 필요
- 일하는 중 1   건드리지 않음
-  ○ Next.js 개발 서버            2시간  주인 있음·CPU 103%      ● 건드리지 않음
- 직접 하면 확보 2   약 22GB · 방법은 w
-  ↓ 2줄 더 있어요(↓ 로 내려 보기)
-╭─ 자세히 · codex app-server ──────────────────────────────────────────────────╮
-│ 무엇    codex app-server — 띄운 Claude 세션 종료됨, 자식 29개 1.0GB          │
-│ 근거    주인 끝남 · CPU 0% · 연결 0 · 디스크 0 · 평생 CPU 낮음 · 신뢰도 확실 │
-│ 대상    pid 51234 · 3일 2시간째 · 프로젝트 warmtalent-ai                     │
-│ 지킴이  평소에는 보고만 해요. 맥이 불안정해지면 자동으로 정리해요.           │
-╰──────────────────────────────────────────────────────────────────────────────╯
- 지킴이 안정화 자동  평소 보고만   확인 17:53:20
-↑↓ 이동  스페이스 고르기  Enter 정리  c 추천 전부 정리  w 자세히  ? 도움말  q 끝
-```
 
 - On **first run**, one screen explains what the guard will do automatically. Enter = start with Stabilize auto, n = Report only. Your choice is saved and can be changed at any time on the Settings screen (4).
 - The top two lines show the STOPCAT logo on the left and, on the right, the memory status and how much you could get back (reclaimable now · after you check · if you do it yourself). The values use the same colors as the list sections. The guard status (level; report-only, unstable, paused, or circuit breaker; last check time) is in the colored bar right above the key line.
@@ -87,24 +112,6 @@ While the screen is open, the guard checks the Mac every 5 seconds (every 2 seco
 - If it tries to stop more than 5 processes in 10 minutes, the **circuit breaker** opens and from then on it only reports. Reset it with `r`.
 - Everything done automatically is recorded on the Auto-action log screen and in the audit log. macOS notifications are sent only when the Mac becomes unstable (with a summary of what can be reclaimed) and when something was cleaned up automatically.
 - Priorities you lowered are restored one at a time with `u`, or all at once when you close the screen. If stopcat is killed forcibly, as with `kill -9`, they cannot be restored and may stay lowered (restarting that program returns it to normal).
-
-## Install
-
-macOS only (Apple silicon and Intel).
-
-```sh
-brew install NewTurn2017/tap/stopcat
-```
-
-Update with `brew upgrade stopcat`, remove with `brew uninstall stopcat`.
-
-To install from source without Homebrew, you need Rust 1.88 or later.
-
-```sh
-cargo install --git https://github.com/NewTurn2017/stopcat stopcat-cli
-```
-
-No administrator privileges (sudo) are needed. Nothing resident and no login items are installed.
 
 ## Commands for scripts and AI
 
@@ -208,6 +215,9 @@ $ stopcat fix
 
 ### Protection rules
 
+<details>
+<summary>Show all 16 protection rules</summary>
+
 If any of these apply, `stopcat` does not stop the target and shows the reason.
 
 | Rule | Never stopped |
@@ -228,6 +238,8 @@ If any of these apply, `stopcat` does not stop the target and shows the reason.
 | R14 | Targets whose start time changed after the preview (PID reuse) |
 | R15 | Children found during execution whose start time cannot confirm they are real children |
 | R16 | Anything beyond the per-run limit (50 by default). Run again to continue |
+
+</details>
 
 ### Where records are kept
 
@@ -270,6 +282,9 @@ You can change this folder with the `STOPCAT_STATE_DIR` environment variable.
 
 ## Exit codes and JSON
 
+<details>
+<summary>Show exit codes and <code>--json</code> keys</summary>
+
 - Exit codes: `0` for success (including when it only previewed, or was refused by a protection rule), `1` for usage errors, missing targets, and internal errors. The full screen exits with `0` when closed with a quit key, `128 + signal number` when ended by a signal (SIGTERM and so on), and `130` if you press Ctrl+C once more while it is shutting down.
 - Top-level `--json` keys (`schema_version` 2. Changes from 1: report.findings[].section (section), report.classified[].usage (usage verdict), and three per-section reclaimable totals in report.totals were added, and the finding kind runaway became high_cpu):
 
@@ -285,6 +300,8 @@ You can change this folder with the `STOPCAT_STATE_DIR` environment variable.
 
 `mode` is one of `nothing_to_do` (nothing to clean up), `non_interactive_preview` (preview only, without confirmation), `declined` (cancelled), or `executed` (ran).
 
+</details>
+
 ## Reporting problems
 
 Please attach the file from `stopcat snapshot --json > snapshot.json`. Secret values in arguments are masked, but folder and program names are included as is, so look it over before sending.
@@ -292,3 +309,7 @@ Please attach the file from `stopcat snapshot --json > snapshot.json`. Secret va
 ## License
 
 [MIT](LICENSE)
+
+---
+
+<p align="center"><sub>Made by <b>Withgenie</b></sub></p>

@@ -1,6 +1,6 @@
 //! 화면 그리기(순수). 모든 줄은 `fmt` 폭 계산(한글 2칸)으로 칸 폭 안에 맞춘 Span 조각으로 쌓는다.
 //!
-//! 배치(80×24 기준): 머리 2줄(왼쪽 STOPCAT 로고, 오른쪽 메모리 상태·확보량) · 탭 1줄 ·
+//! 배치(80×24 기준): 머리 2줄(왼쪽 STOPCAT 로고, 오른쪽 메모리 상태·확보량) · 빈 줄 · 탭 1줄 ·
 //! 본문 · 지킴이 상태 막대 1줄 · 키 안내 1줄. 대화상자는 뒤를 어둡게 하고 위에 띄운다.
 
 use ratatui::Frame;
@@ -263,8 +263,10 @@ pub fn draw(f: &mut Frame, m: &Model) {
         return;
     }
     header(&mut s, m, t);
+    // 로고와 탭 사이 숨 쉴 한 줄.
+    s.blank();
     tabs_line(&mut s, m, t);
-    let body_h = h - 5;
+    let body_h = h - 6;
     let start = s.lines.len();
     match m.tab {
         Tab::Findings => findings_body(&mut s, m, t, body_h, h),
@@ -1678,9 +1680,9 @@ fn draw_dialog(f: &mut Frame, m: &Model, d: &Dialog, area: Rect, t: Theme) {
         Dialog::Why { lines, scroll } => {
             let r = Rect {
                 x: area.x,
-                y: area.y + 3,
+                y: area.y + 4,
                 width: area.width,
-                height: area.height - 3,
+                height: area.height - 4,
             };
             let mut s = Screen::new(area.width);
             let inner = r.height as usize - 3;

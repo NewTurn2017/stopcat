@@ -1,47 +1,72 @@
-[한국어](README.md) · [English](README.en.md)
+<p align="center">
+  <img src="docs/screenshot.png" alt="StopCat 보고 화면" width="820">
+</p>
 
-# StopCat — 필요 없는 것만 멈추는 맥 정리 도구
+<h1 align="center">StopCat</h1>
 
-맥이 느려졌을 때 "무엇이 왜 떠 있는지"를 쉬운 한국어로 보여 주고, 확인을 받은 뒤에만 정리하는 macOS 도구입니다. 화면을 띄워 두면 **지킴이**가 필요 없는 것과 되찾을 수 있는 양을 근거와 함께 보고하고, 맥이 불안정할 때만 '필요 없음'이 확실한 것을 정리합니다. 지금 쓰고 있는 것은 끄지도, 느리게 하지도 않습니다.
+<p align="center">
+  <b>필요 없는 것만 멈추는 맥 정리 도구</b><br>
+  무엇이 왜 떠 있는지 보여 주고, 확인을 받은 뒤에만 정리합니다.
+</p>
 
-AI로 서버를 띄우고 여러 에이전트를 돌리다 보면 주인 없는 프로세스, 끝난 테스트가 남긴 에뮬레이터·브라우저, 외부에 열린 포트가 쌓입니다. `stopcat`은 프로세스 번호(PID) 대신 **프로젝트와 AI 세션 단위**로 맥을 보고, 끄기 전에 **누가 왜 띄웠는지** 설명합니다.
+<p align="center">
+  <a href="https://github.com/NewTurn2017/stopcat/releases/latest"><img src="https://img.shields.io/github/v/release/NewTurn2017/stopcat?style=flat-square&color=ff4d6d&label=release" alt="release"></a>
+  <a href="https://github.com/NewTurn2017/homebrew-tap"><img src="https://img.shields.io/badge/brew-NewTurn2017%2Ftap%2Fstopcat-ff9f43?style=flat-square&logo=homebrew&logoColor=white" alt="homebrew"></a>
+  <img src="https://img.shields.io/badge/macOS-Apple%20silicon%20%C2%B7%20Intel-1f2328?style=flat-square&logo=apple&logoColor=white" alt="macOS">
+  <img src="https://img.shields.io/badge/Rust-1.88%2B-dea584?style=flat-square&logo=rust&logoColor=white" alt="Rust">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-9775fa?style=flat-square" alt="MIT"></a>
+</p>
 
-![StopCat 보고 화면](docs/screenshot.png)
+<p align="center"><b>한국어</b> · <a href="README.en.md">English</a></p>
+
+## 왜 StopCat인가
+
+AI로 서버를 띄우고 여러 에이전트를 돌리다 보면 주인 없는 프로세스, 끝난 테스트가 남긴 에뮬레이터·브라우저, 외부에 열린 포트가 쌓입니다. 활성 상태 보기는 프로세스 번호(PID)만 보여 줘서, 무엇을 꺼도 되는지 알기 어렵습니다.
+
+`stopcat`은 맥을 **프로젝트와 AI 세션 단위**로 보고, 끄기 전에 **누가 왜 띄웠는지** 쉬운 한국어로 설명합니다. 화면을 띄워 두면 **지킴이**가 필요 없는 것과 되찾을 수 있는 양을 근거와 함께 보고하고, 맥이 불안정할 때만 '필요 없음'이 확실한 것을 정리합니다. 지금 쓰고 있는 것은 끄지도, 느리게 하지도 않습니다.
+
+## 빠른 시작
+
+```sh
+brew install NewTurn2017/tap/stopcat
+stopcat
+```
+
+- 처음 실행하면 지킴이가 무엇을 자동으로 하는지 한 화면으로 보여 줍니다. Enter는 안정화 자동, n은 보고만입니다.
+- macOS 전용입니다(Apple 실리콘·Intel 모두). 관리자 권한(sudo)이 필요 없고, 상주 프로그램이나 로그인 항목을 설치하지 않습니다.
+- 업데이트는 `brew upgrade stopcat`, 지우기는 `brew uninstall stopcat`입니다.
+- Homebrew 없이 소스에서 설치하려면 Rust(1.88 이상)가 필요합니다.
+
+```sh
+cargo install --git https://github.com/NewTurn2017/stopcat stopcat-cli
+```
+
+## 특징
+
+- **프로젝트·AI 세션 단위** — 프로세스 번호 대신 어느 프로젝트, 어느 Claude·Codex 세션이 띄웠는지로 묶어 보여 줍니다.
+- **근거부터** — 줄마다 주인 끝남·CPU·연결·디스크 같은 근거와 신뢰도를 붙입니다. `w`를 누르면 띄운 계보를 끝까지 따라갑니다.
+- **확인 없이는 끄지 않음** — 언제나 미리보기 → `y`. 정상 종료 신호 → 3초 기다림 → 그래도 남으면 강제 종료 순서로 단계적으로 끕니다.
+- **쓰고 있는 것은 건드리지 않음** — CPU 100%여도, AI 대화 세션·앱·가상 머신·DB도 자동으로 끄지 않습니다. 16가지 보호 규칙이 마지막까지 막습니다.
+- **지킴이** — 평소엔 보고만 하고, 맥이 불안정할 때만 확실한 것을 정상으로 돌아올 만큼만 정리합니다. 10분에 5개를 넘기려 하면 차단기가 열립니다.
+- **스크립트·AI 친화** — `--plain`·`--json`과 `why`·`ports`·`fix`·`kill` 하위 명령으로 에이전트도 그대로 씁니다.
+- **모든 기록은 맥 안에** — 감사 로그와 되살리기 정보를 남기고, 맥 밖으로는 아무것도 보내지 않습니다.
+
+## 화면 둘러보기
+
+<table>
+  <tr>
+    <td><img src="docs/preview.png" alt="c 추천 전부 정리 — 미리보기 뒤 y로 실행"></td>
+    <td><img src="docs/first-run.png" alt="첫 실행 — 지킴이 수준 고르기"></td>
+  </tr>
+  <tr>
+    <td align="center">c 추천 전부 정리 — 미리보기 뒤 y로 실행</td>
+    <td align="center">첫 실행 — 지킴이 수준 고르기</td>
+  </tr>
+</table>
 
 > 이 문서의 화면 예시는 모두 합성 데이터입니다. 실제 값은 맥마다 다릅니다.
 >
 > 이름은 CPU가 바쁠수록 고양이가 빨리 달리는 메뉴바 앱 [RunCat](https://kyome.io/runcat/)에서 착안했지만, StopCat은 RunCat과 관계없는 독립 프로젝트입니다.
-
-## stopcat 하나로 쓰기
-
-터미널에서 `stopcat` 만 치면 됩니다. 전체 화면이 뜨고, 방향키로 고르고 Enter로 정리합니다.
-
-```
-█▀ ▀█▀ █▀█ █▀█ █▀▀ ▄▀█ ▀█▀  ● 메모리 정상 · 압력 1 · 압축 41GB · 스왑 1.6/2GB
-▄█  █  █▄█ █▀▀ █▄▄ █▀█  █   확보 가능 1.5GB · 확인하면 +8.0GB · 직접 하면 +22GB
- 1 보고 9   2 포트 6   3 자동 처리 기록 0   4 설정             Made by Withgenie
-    대상                   크기  나이   근거                    지킴이
- 필요 없음 3   정리하면 약 1.5GB · c 로 전부 정리
-❯ ○ codex app-server      1.0GB  3일    주인 끝남·CPU 0·연결 0  ◷ 불안정 시 자동
-  ○ headless Chrome (Ch…  380MB  7시간  주인 끝남·CPU 0·연결 0  ◆ 정리 추천
-  ○ npm exec               84MB  3일    주인 끝남·CPU 0·연결 0  ◆ 정리 추천
- 확인 필요 3   쓰고 있는지 확실하지 않아 보고만 · 확인하면 약 8.0GB
-  ○ Android 에뮬레이터 …  7.5GB  3일    주인 끝남·CPU 3%·연결 6 ▲ 확인 필요
-  ○ appium (앱 테스트) …  412MB  2일    주인 있음·안 쓰는 듯    ▲ 확인 필요
-  ○ 테스트 서버 (node) …   96MB  1일    주인 끝남·CPU 0·연결 …  ▲ 확인 필요
- 일하는 중 1   건드리지 않음
-  ○ Next.js 개발 서버            2시간  주인 있음·CPU 103%      ● 건드리지 않음
- 직접 하면 확보 2   약 22GB · 방법은 w
-  ↓ 2줄 더 있어요(↓ 로 내려 보기)
-╭─ 자세히 · codex app-server ──────────────────────────────────────────────────╮
-│ 무엇    codex app-server — 띄운 Claude 세션 종료됨, 자식 29개 1.0GB          │
-│ 근거    주인 끝남 · CPU 0% · 연결 0 · 디스크 0 · 평생 CPU 낮음 · 신뢰도 확실 │
-│ 대상    pid 51234 · 3일 2시간째 · 프로젝트 warmtalent-ai                     │
-│ 지킴이  평소에는 보고만 해요. 맥이 불안정해지면 자동으로 정리해요.           │
-╰──────────────────────────────────────────────────────────────────────────────╯
- 지킴이 안정화 자동  평소 보고만   확인 17:53:20
-↑↓ 이동  스페이스 고르기  Enter 정리  c 추천 전부 정리  w 자세히  ? 도움말  q 끝
-```
 
 - **처음 실행**하면 지킴이가 무엇을 자동으로 하는지 한 화면으로 보여 줍니다. Enter = 안정화 자동으로 시작, n = 보고만. 고른 값은 저장되고, 설정 화면(4)에서 언제든 바꿀 수 있습니다.
 - 맨 위 두 줄은 왼쪽에 STOPCAT 로고, 오른쪽에 메모리 상태와 되찾을 수 있는 양(확보 가능 · 확인하면 · 직접 하면)입니다. 값의 색은 목록 구역 색과 같습니다. 지킴이 상태(수준, 평소 보고만·불안정·일시정지·차단기, 마지막 확인 시각)는 키 줄 바로 위 색 막대에 있습니다.
@@ -85,24 +110,6 @@ AI로 서버를 띄우고 여러 에이전트를 돌리다 보면 주인 없는 
 - 10분에 5개를 넘게 끄려 하면 **차단기**가 열려 그 뒤로는 보고만 합니다. `r`로 풀 수 있습니다.
 - 자동으로 한 일은 '자동 처리 기록' 화면과 감사 로그에 남습니다. macOS 알림은 맥이 불안정해졌을 때(되찾을 수 있는 양 요약)와 자동으로 정리했을 때만 보냅니다.
 - 직접 낮춘 우선순위는 `u`로 하나씩, 또는 화면을 닫을 때 한꺼번에 되돌립니다. `kill -9`처럼 stopcat을 강제로 죽이면 되돌리지 못하고 남을 수 있습니다(그 프로그램을 다시 시작하면 원래대로 돌아옵니다).
-
-## 설치
-
-macOS 전용입니다(Apple 실리콘·Intel 모두).
-
-```sh
-brew install NewTurn2017/tap/stopcat
-```
-
-업데이트는 `brew upgrade stopcat`, 지우기는 `brew uninstall stopcat`입니다.
-
-Homebrew 없이 소스에서 설치하려면 Rust(1.88 이상)가 필요합니다.
-
-```sh
-cargo install --git https://github.com/NewTurn2017/stopcat stopcat-cli
-```
-
-관리자 권한(sudo)은 필요 없습니다. 상주 프로그램이나 로그인 항목을 설치하지 않습니다.
 
 ## 스크립트·AI용 명령
 
@@ -206,6 +213,9 @@ $ stopcat fix
 
 ### 보호 규칙
 
+<details>
+<summary>보호 규칙 16가지 펼치기</summary>
+
 아래에 걸리면 `stopcat`은 끄지 않고 이유를 보여 줍니다.
 
 | 규칙 | 끄지 않는 대상 |
@@ -226,6 +236,8 @@ $ stopcat fix
 | R14 | 미리보기 뒤 시작 시각이 달라진 대상(번호 재사용) |
 | R15 | 실행 중 찾은 자식이 진짜 자식인지 시작 시각으로 확인되지 않는 경우 |
 | R16 | 한 번에 정리할 수 있는 개수(기본 50개)를 넘은 나머지. 다시 실행하면 이어서 정리 |
+
+</details>
 
 ### 기록 위치
 
@@ -269,6 +281,9 @@ $ stopcat fix
 
 ## 종료 코드와 JSON
 
+<details>
+<summary>종료 코드와 `--json` 키 펼치기</summary>
+
 - 종료 코드: `0` 정상(미리보기만 하고 끝난 경우, 보호 규칙으로 거부된 경우 포함), `1` 사용법 오류·대상 없음·내부 오류. 전체 화면은 끝내기 키로 끝나면 `0`, 신호(SIGTERM 등)로 끝나면 `128 + 신호 번호`, 끝내는 중 Ctrl+C를 한 번 더 누르면 `130`.
 - `--json` 최상위 키(`schema_version` 2. 1에서 바뀐 점: report.findings[].section(구역), report.classified[].usage(사용 판정), report.totals의 구역별 확보량 세 값이 더해졌고, 발견 종류 runaway는 high_cpu로 바뀌었습니다):
 
@@ -284,6 +299,8 @@ $ stopcat fix
 
 `mode`는 `nothing_to_do`(정리할 것 없음), `non_interactive_preview`(확인 없이 미리보기만), `declined`(취소), `executed`(실행함) 중 하나입니다.
 
+</details>
+
 ## 문제 신고
 
 `stopcat snapshot --json > snapshot.json`으로 받은 파일을 함께 보내 주세요. 인자 속 비밀값은 가려지지만, 폴더 이름·프로그램 이름은 그대로 들어 있으니 보내기 전에 한 번 훑어보세요.
@@ -291,3 +308,7 @@ $ stopcat fix
 ## 라이선스
 
 [MIT](LICENSE)
+
+---
+
+<p align="center"><sub>Made by <b>Withgenie</b></sub></p>

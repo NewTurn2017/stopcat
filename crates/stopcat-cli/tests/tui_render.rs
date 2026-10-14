@@ -58,7 +58,7 @@ fn list_block(l: &[String]) -> Vec<String> {
         .iter()
         .position(|x| x.starts_with("    대상"))
         .expect("열 머리");
-    l[i..i + 13].to_vec()
+    l[i..i + 12].to_vec()
 }
 
 fn both(m: &mut Model) -> Vec<Vec<String>> {
@@ -100,8 +100,8 @@ fn list_names_have_no_size_or_age() {
     }
 }
 
-/// 평소 보고 화면 목록(열 머리 + 구역 머리 4 + 행 7 + 아래 표시), 80칸.
-const LIST_80: [&str; 13] = [
+/// 평소 보고 화면 목록(열 머리 + 구역 머리 3 + 행 7 + 아래 표시), 80칸.
+const LIST_80: [&str; 12] = [
     "    대상                   크기  나이   근거                    지킴이",
     " 필요 없음 3   정리하면 약 1.5GB · c 로 전부 정리",
     "❯ ○ codex app-server      1.0GB  3일    주인 끝남·CPU 0·연결 0  ◷ 불안정 시 자동",
@@ -113,8 +113,7 @@ const LIST_80: [&str; 13] = [
     "  ○ 테스트 서버 (node) …   96MB  1일    주인 끝남·CPU 0·연결 …  ▲ 확인 필요",
     " 일하는 중 1   건드리지 않음",
     "  ○ Next.js 개발 서버            2시간  주인 있음·CPU 103%      ● 건드리지 않음",
-    " 직접 하면 확보 2   약 22GB · 방법은 w",
-    "  ↓ 2줄 더 있어요(↓ 로 내려 보기)",
+    "  ↓ 3줄 더 있어요(↓ 로 내려 보기)",
 ];
 
 #[test]
@@ -133,8 +132,8 @@ fn report_tab_normal() {
             "{}",
             l[1]
         );
-        assert!(l[2].starts_with(" 1 보고 9 "), "{}", l[2]);
-        assert!(l[2].ends_with(view::CREDIT), "{}", l[2]);
+        assert!(l[3].starts_with(" 1 보고 9 "), "{}", l[3]);
+        assert!(l[3].ends_with(view::CREDIT), "{}", l[3]);
         assert!(
             l[h - 2].starts_with(" 지킴이 안정화 자동  평소 보고만   확인 "),
             "{}",
@@ -149,7 +148,6 @@ fn report_tab_normal() {
             " 필요 없음 3   정리하면 약 1.5GB · c 로 전부 정리",
             " 확인 필요 3   쓰고 있는지 확실하지 않아 보고만 · 확인하면 약 8.0GB",
             " 일하는 중 1   건드리지 않음",
-            " 직접 하면 확보 2   약 22GB · 방법은 w",
         ];
         let pos: Vec<usize> = order
             .iter()
@@ -160,6 +158,7 @@ fn report_tab_normal() {
     }
     assert_eq!(list_block(&render(&mut m, 80, 24)), LIST_80);
     let l = render(&mut m, 120, 40);
+    assert!(has(&l, " 직접 하면 확보 2   약 22GB · 방법은 w"));
     assert!(has(&l, "omo 세션(bun)") && has(&l, "핸드오프 저장 후 재시작 ◇ 직접 하면 확보"));
     assert!(has(&l, "aside 좀비 20개") && has(&l, "↻ 앱 재시작 필요"));
     assert!(has(&l, "왜      띄운 Claude 세션이 이미 끝났어요"));
@@ -224,11 +223,11 @@ fn report_tab_circuit_open() {
 fn report_tab_scrolls_to_manual_rows() {
     let mut m = calm_model();
     let l = render(&mut m, 80, 24);
-    assert_eq!(l[15], view::more_below(2));
+    assert_eq!(l[15], view::more_below(3));
     cursor_to_pid(&mut m, 8101);
     let l = render(&mut m, 80, 24);
     check_widths(&l, 80);
-    assert_eq!(l[4], view::more_above(2));
+    assert_eq!(l[5], view::more_above(3));
     assert!(l[15].starts_with("❯   aside 좀비 20개"), "{}", l[15]);
     assert!(has(&l, "방법    띄운 앱 다시 시작"));
     assert!(has(&l, "지킴이  이미 끝난 프로세스예요."));
@@ -240,7 +239,7 @@ fn report_tab_all_empty() {
     m.apply(update_from(report_empty(), AutoLevel::Safe, |_, _| {}));
     for l in both(&mut m) {
         assert!(l[1].ends_with("지금 확보할 것이 없어요"), "{}", l[1]);
-        assert!(l[2].starts_with(" 1 보고 0 "), "{}", l[2]);
+        assert!(l[3].starts_with(" 1 보고 0 "), "{}", l[3]);
         assert!(has(&l, view::EMPTY_CAT[1]));
         for t in view::EMPTY_BODY.iter().filter(|t| !t.is_empty()) {
             assert!(has(&l, t), "{t}");
@@ -423,7 +422,7 @@ fn first_report_shows_notice_and_hides_definite_lines() {
     assert!(view::first_report(&m));
     for l in both(&mut m) {
         assert!(l[1].ends_with(view::RECLAIM_FIRST), "{}", l[1]);
-        assert_eq!(l[3], view::FIRST_REPORT);
+        assert_eq!(l[4], view::FIRST_REPORT);
         assert!(!has(&l, "필요 없음 0") && !has(&l, view::UNNEEDED_EMPTY_LINE));
         assert!(!has(&l, "확보 가능 0") && !has(&l, "맥 상태가 좋아요"));
         assert!(has(&l, "확인 필요 ") && has(&l, "주인 끝남·CPU 모름"));
@@ -443,7 +442,7 @@ fn first_report_shows_notice_and_hides_definite_lines() {
     e.apply(first_scan_update(report_empty()));
     for l in both(&mut e) {
         assert!(l[1].ends_with(view::RECLAIM_FIRST), "{}", l[1]);
-        assert_eq!(l[3], view::FIRST_REPORT);
+        assert_eq!(l[4], view::FIRST_REPORT);
         assert!(!has(&l, "맥 상태가 좋아요") && !has(&l, "지금 확보할 것이 없어요"));
     }
 }
@@ -541,7 +540,7 @@ fn log_tab_with_and_without_events() {
     m.apply(u);
     assert_eq!(m.tab, Tab::Log);
     for l in both(&mut m) {
-        assert!(l[2].contains(" 3 자동 처리 기록 2 "), "{}", l[2]);
+        assert!(l[3].contains(" 3 자동 처리 기록 2 "), "{}", l[3]);
         assert!(has(&l, "이번에 자동으로 정리한 양 약 96MB · 자동 종료 1건"));
         assert!(has(&l, "자동 종료") && has(&l, "MCP 서버: chrome-devtools"));
         assert!(has(&l, "수준 바꿈"));
