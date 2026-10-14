@@ -1,4 +1,5 @@
-//! 동기 엔진. 스레드 없이 테스트한다. 한 스캔 = 수집 → CPU% 보간 → 분석 → 판정 → 계획·실행 → 이벤트·알림.
+//! 동기 엔진. 스레드 없이 테스트한다. 한 스캔 = 수집 → CPU%·디스크 증가량 보간 → 분석 → 관찰 기억(강제 건강·스왑·
+//! idle_since) → 판정 → 정상↔불안정 전환 → 계획·실행 → 이벤트·알림.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -6,16 +7,18 @@ use std::sync::Arc;
 use vh_act::{PlanOrigin, Policy, PriorityTarget, Selection};
 use vh_model::{
     ActionOutcome, ActionPlan, AutoLevel, DemotedProc, FinalState, GuardEvent, GuardEventKind,
-    GuardPolicy, GuardStatus, HealthLevel, PendingAction, ProcRef, Refusal, Report, Snapshot, Step,
+    GuardPolicy, GuardStatus, PendingAction, ProcRef, Refusal, Report, Section, Snapshot, Step,
+    UnstableReason,
 };
 
 use crate::backend::GuardBackend;
-use crate::cpu::{fill_cpu_pct, remember};
-use crate::decide::{Candidate, NotifyItem, SkipReason, decide_lean};
+use crate::cpu::{fill_cpu_pct, fill_disk_delta, remember};
+use crate::decide::{Candidate, decide_lean};
 use crate::handle::{GuardCommand, GuardUpdate, ManualRunResult, ShutdownReport};
 use crate::memory::{Demoted, GuardMemory};
 use crate::notify::{NotifyBatcher, notify_name};
 use crate::snap::bare_snapshot;
+use crate::stability::{Stability, observe};
 
 /// 한 번의 자동 실행(execute)이 쓸 수 있는 총 시간.
 pub const EXEC_DEADLINE_MS: u64 = 20_000;
@@ -38,6 +41,7 @@ pub struct Engine<B: GuardBackend> {
     scan_error_streak: u32,
     pending: Vec<PendingAction>,
     buffered_events: Vec<GuardEvent>,
+    stab: Stability,
 }
 
 impl<B: GuardBackend> Engine<B> {
@@ -56,6 +60,7 @@ impl<B: GuardBackend> Engine<B> {
             scan_error_streak: 0,
             pending: Vec::new(),
             buffered_events: Vec::new(),
+            stab: Stability::stable(),
         }
     }
 
@@ -115,13 +120,17 @@ impl<B: GuardBackend> Engine<B> {
                 })
                 .collect(),
             pending: self.pending.clone(),
-            health: HealthLevel::Ok,
-            health_forced: None,
-            unstable: false,
-            unstable_reasons: Vec::new(),
-            unstable_since_unix_ms: None,
-            settle_until_unix_ms: None,
-            swap_delta_bytes: None,
+            health: self.stab.health,
+            health_forced: self.mem.forced_health,
+            unstable: self.stab.unstable,
+            unstable_reasons: self.stab.reasons.clone(),
+            unstable_since_unix_ms: self.mem.unstable_since_unix_ms,
+            settle_until_unix_ms: self
+                .mem
+                .last_round_at_unix_ms
+                .map(|t| t.saturating_add(self.policy.settle_ms))
+                .filter(|&u| self.stab.unstable && u > now),
+            swap_delta_bytes: self.stab.swap_delta_bytes,
         }
     }
 
@@ -172,25 +181,24 @@ impl<B: GuardBackend> Engine<B> {
             }
         };
         fill_cpu_pct(&mut snapshot, &self.mem);
+        fill_disk_delta(&mut snapshot, &self.mem);
         let report = self.backend.analyze(&snapshot);
         let now = self.now_unix_ms();
+        let forced = self.backend.forced_health();
+        observe(&mut self.mem, &snapshot, &report, forced, &self.policy, now);
         let d = decide_lean(&self.mem, &snapshot, &report, &self.policy, now);
         self.mem.term_streak = d.next_term_streak;
-        self.mem.cpu_streak = d.next_cpu_streak;
         remember(&mut self.mem, &snapshot);
         self.mem.prune_window(now, self.policy.rate_window_ms);
 
         let mut events = Vec::new();
+        self.transition(&d.stability, &report, now, &mut events);
+        self.stab = d.stability;
         if d.trip_circuit && !self.mem.circuit_open {
             self.mem.circuit_open = true;
             self.mem.circuit_opened_at_unix_ms = Some(now);
-            let n = d
-                .notify
-                .iter()
-                .filter(|n| n.reason == SkipReason::QuotaExceeded)
-                .count();
             let detail = format!(
-                "자동 종료 후보 {n}개가 한꺼번에 나와(10분에 {}개 제한) 자동 종료를 멈췄어요. 화면에서 r로 다시 켤 수 있어요",
+                "자동 정리 후보가 한꺼번에 많이 나와(10분에 {}개 제한) 자동 정리를 멈췄어요. 화면에서 r로 다시 켤 수 있어요",
                 self.policy.max_auto_terminations
             );
             events.push(self.event(
@@ -203,17 +211,10 @@ impl<B: GuardBackend> Engine<B> {
             ));
             self.batcher.push(detail);
         }
-        if !d.terminate.is_empty() {
-            self.run_terminations(&d.terminate, &snapshot, &report, now, &mut events);
-        }
-        if !d.demote.is_empty() {
-            self.run_demotes(&d.demote, &snapshot, &report, &mut events);
-        }
-        for n in &d.notify {
-            if self.mem.notified.insert((n.target, n.reason)) {
-                let name = notify_name_for(&report, n.target, &n.label_ko);
-                self.batcher.push(notify_line(n, &name));
-            }
+        if !d.terminate.is_empty()
+            && self.run_terminations(&d.terminate, &snapshot, &report, now, &mut events)
+        {
+            self.mem.last_round_at_unix_ms = Some(now);
         }
         let alive: HashSet<ProcRef> = snapshot
             .processes
@@ -223,7 +224,6 @@ impl<B: GuardBackend> Engine<B> {
                 start_time_unix_ms: p.start_time_unix_ms,
             })
             .collect();
-        self.mem.notified.retain(|(t, _)| alive.contains(t));
         self.mem.refused.retain(|t| alive.contains(t));
         self.prune_gone_demoted(&alive, &mut events);
 
@@ -237,6 +237,55 @@ impl<B: GuardBackend> Engine<B> {
         self.next_scan_at_unix_ms = self.now_unix_ms() + u64::from(d.next_scan_interval_ms);
         self.last = Some((Arc::new(snapshot), Arc::new(report)));
         self.update_after(events, None)
+    }
+
+    /// 정상↔불안정 전환. 불안정이 되면 Unstable 이벤트와(일시정지가 아니고 쿨다운이 지났으면) 확보량 요약 알림 1줄,
+    /// 정상으로 돌아오면 Stable 이벤트(알림 없음)와 연속 확인·정착 시각을 비운다.
+    fn transition(
+        &mut self,
+        stab: &Stability,
+        report: &Report,
+        now: u64,
+        events: &mut Vec<GuardEvent>,
+    ) {
+        let was = self.mem.unstable_since_unix_ms.is_some();
+        if stab.unstable && !was {
+            self.mem.unstable_since_unix_ms = Some(now);
+            let summary = unstable_summary(
+                report,
+                stab,
+                self.mem.forced_health.is_some(),
+                self.policy.level,
+            );
+            events.push(self.event(
+                GuardEventKind::Unstable,
+                None,
+                None,
+                None,
+                GUARD_LABEL,
+                &summary,
+            ));
+            let cooled = self
+                .mem
+                .last_unstable_notified_at_unix_ms
+                .is_none_or(|t| now.saturating_sub(t) >= self.policy.unstable_notify_cooldown_ms);
+            if cooled && !self.mem.paused {
+                self.mem.last_unstable_notified_at_unix_ms = Some(now);
+                self.batcher.push(summary);
+            }
+        } else if !stab.unstable && was {
+            self.mem.unstable_since_unix_ms = None;
+            self.mem.last_round_at_unix_ms = None;
+            self.mem.term_streak.clear();
+            events.push(self.event(
+                GuardEventKind::Stable,
+                None,
+                None,
+                None,
+                GUARD_LABEL,
+                "정상으로 돌아와 자동 정리를 멈췄어요",
+            ));
+        }
     }
 
     /// 명령 하나. 상태만 담은 갱신을 돌려준다(ScanNow는 스캔 결과).
@@ -403,7 +452,7 @@ impl<B: GuardBackend> Engine<B> {
         report: &Report,
         now: u64,
         events: &mut Vec<GuardEvent>,
-    ) {
+    ) -> bool {
         let pol = self.act_policy(self.policy.grace_ms, 1);
         let mut items = Vec::new();
         for c in cands {
@@ -428,7 +477,7 @@ impl<B: GuardBackend> Engine<B> {
             items.extend(plan.items);
         }
         if items.is_empty() {
-            return;
+            return false;
         }
         for _ in &items {
             self.mem.terminations.push_back(now);
@@ -450,6 +499,7 @@ impl<B: GuardBackend> Engine<B> {
             let name = notify_name_for(report, o.action.target, &label);
             self.record_termination(&o, &label, &name, &run_id, events);
         }
+        true
     }
 
     fn record_termination(
@@ -502,89 +552,6 @@ impl<B: GuardBackend> Engine<B> {
                     Some(fid),
                     Some(run_id),
                     label,
-                    &o.note_ko,
-                ));
-            }
-        }
-    }
-
-    fn run_demotes(
-        &mut self,
-        cands: &[Candidate],
-        snapshot: &Snapshot,
-        report: &Report,
-        events: &mut Vec<GuardEvent>,
-    ) {
-        let targets: Vec<PriorityTarget> = cands
-            .iter()
-            .map(|c| PriorityTarget {
-                target: c.target,
-                step: Step::Demote,
-                reason_ko: c.label_ko.clone(),
-            })
-            .collect();
-        let pol = self.act_policy(0, cands.len().max(1));
-        let plan = self
-            .backend
-            .plan_priority(snapshot, Some(report), &targets, &pol);
-        for rf in &plan.refused {
-            self.mem.refused.insert(rf.target);
-            let label = label_of(cands, rf.target);
-            events.push(self.event(
-                GuardEventKind::Refused,
-                Some(rf.target),
-                None,
-                None,
-                &label,
-                &format!("{}: {}", rf.rule, rf.reason_ko),
-            ));
-        }
-        if plan.items.is_empty() {
-            return;
-        }
-        let run_id = format!("guard-{}-demote", self.mem.scan_seq + 1);
-        let now = self.now_unix_ms();
-        let outcomes = self.backend.execute(&plan, snapshot, &run_id);
-        for o in outcomes {
-            let t = o.action.target;
-            let label = label_of(cands, t);
-            let fid = cands
-                .iter()
-                .find(|c| c.target == t)
-                .map(|c| c.finding_id.clone())
-                .unwrap_or_else(|| o.action.finding_id.clone());
-            if step_ok(&o, Step::Demote) {
-                self.mem.demoted.insert(
-                    t,
-                    Demoted {
-                        at_unix_ms: now,
-                        label_ko: label.clone(),
-                        finding_id: fid.clone(),
-                    },
-                );
-                events.push(self.event(
-                    GuardEventKind::Demoted,
-                    Some(t),
-                    Some(&fid),
-                    Some(&run_id),
-                    &label,
-                    &o.note_ko,
-                ));
-                let name = notify_name_for(report, t, &label);
-                self.batcher.push(format!("{name} 우선순위 낮춤"));
-            } else {
-                self.mem.refused.insert(t);
-                let kind = if o.final_state == FinalState::Refused {
-                    GuardEventKind::Refused
-                } else {
-                    GuardEventKind::Skipped
-                };
-                events.push(self.event(
-                    kind,
-                    Some(t),
-                    Some(&fid),
-                    Some(&run_id),
-                    &label,
                     &o.note_ko,
                 ));
             }
@@ -920,14 +887,6 @@ fn step_ok(o: &ActionOutcome, step: Step) -> bool {
     o.steps.iter().any(|s| s.step == step && s.ok)
 }
 
-fn label_of(cands: &[Candidate], t: ProcRef) -> String {
-    cands
-        .iter()
-        .find(|c| c.target == t)
-        .map(|c| c.label_ko.clone())
-        .unwrap_or_else(|| format!("pid {}", t.pid))
-}
-
 fn notify_name_for(report: &Report, t: ProcRef, label: &str) -> String {
     let project = report
         .classified
@@ -937,35 +896,10 @@ fn notify_name_for(report: &Report, t: ProcRef, label: &str) -> String {
     notify_name(label, project, t.pid)
 }
 
-fn notify_line(n: &NotifyItem, name: &str) -> String {
-    match n.reason {
-        SkipReason::KindNotifyOnly => format!(
-            "{}: 정리 후보지만 자동으로 끄지 않아요(알림만, {})",
-            name,
-            fmt_bytes(n.reclaim_bytes)
-        ),
-        SkipReason::LevelNotifyOnly => format!(
-            "{}: 정리 후보({}). 화면에서 고르면 정리해요",
-            name,
-            fmt_bytes(n.reclaim_bytes)
-        ),
-        SkipReason::CircuitOpen => {
-            format!("{}: 차단기가 열려 있어 끄지 않았어요", name)
-        }
-        SkipReason::QuotaExceeded => {
-            format!("{}: 한꺼번에 너무 많아 끄지 않았어요", name)
-        }
-        SkipReason::RunawayNoDemote => {
-            format!("{}: CPU 폭주(우선순위는 낮추지 않아요)", name)
-        }
-        _ => format!("{}: 자동 조치하지 않았어요", name),
-    }
-}
-
 pub(crate) fn level_ko(l: AutoLevel) -> &'static str {
     match l {
-        AutoLevel::NotifyOnly => "알림만",
-        AutoLevel::Safe => "안전 자동",
+        AutoLevel::NotifyOnly => "보고만",
+        AutoLevel::Safe => "안정화 자동",
         AutoLevel::Aggressive => "적극 자동",
     }
 }
@@ -981,4 +915,42 @@ pub(crate) fn fmt_bytes(b: u64) -> String {
     } else {
         format!("{}KB", b / 1024)
     }
+}
+
+/// 불안정 전환 요약(알림·Unstable 이벤트 문구). 수치는 `Report.totals`의 구역별 확보량.
+pub(crate) fn unstable_summary(
+    report: &Report,
+    stab: &Stability,
+    forced: bool,
+    level: AutoLevel,
+) -> String {
+    let why: Vec<&str> = stab
+        .reasons
+        .iter()
+        .map(|r| match r {
+            UnstableReason::HealthWatch => "건강 주의",
+            UnstableReason::HealthCritical => "건강 위험",
+            UnstableReason::SwapGrowing => "스왑이 빠르게 늘어남",
+        })
+        .collect();
+    let n = report
+        .findings
+        .iter()
+        .filter(|f| f.section == Section::Unneeded)
+        .map(|f| f.targets.len())
+        .sum::<usize>();
+    let t = &report.totals;
+    let act = match level {
+        AutoLevel::NotifyOnly => "화면에서 골라 정리할 수 있어요",
+        AutoLevel::Safe => "필요 없음이 확실한 것부터 자동으로 정리해요",
+        AutoLevel::Aggressive => "필요 없음(가능성 높음 포함)부터 자동으로 정리해요",
+    };
+    format!(
+        "{}맥이 불안정해요({}). 필요 없음 {}({n}개) · 확인하면 +{} · 직접 하면 +{}. {act}",
+        if forced { "[시험] " } else { "" },
+        why.join(", "),
+        fmt_bytes(t.unneeded_bytes),
+        fmt_bytes(t.check_bytes),
+        fmt_bytes(t.manual_bytes),
+    )
 }

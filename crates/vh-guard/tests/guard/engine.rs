@@ -25,6 +25,11 @@ fn manual_demote(
     .expect("수동 낮추기 갱신")
 }
 
+/// 첫 스캔(scan()이 5초 민 뒤)이 남긴 '안 씀' 시작 시각부터 `idle_confirm_ms`(2분)가 차도록 시계를 민다.
+fn wait_idle(clock: &FakeClock) {
+    clock.advance(safe().idle_confirm_ms - 5000);
+}
+
 fn engine_for(scene: &Scene, policy: GuardPolicy) -> (Engine<FakeGuardBackend>, Probe, FakeClock) {
     let clock = FakeClock::at(T0);
     let (s, r) = scene.build(T0);
@@ -51,7 +56,7 @@ fn audit(probe: &Probe) -> Vec<AuditEntry> {
 
 #[test]
 fn safe_auto_terminates_through_plan_execute_with_audit_event_and_notification() {
-    let mut sc = Scene::new();
+    let mut sc = Scene::unstable();
     let t = sc.leftover(
         101,
         Kind::McpServer,
@@ -63,7 +68,9 @@ fn safe_auto_terminates_through_plan_execute_with_audit_event_and_notification()
     let u1 = scan(&mut e, &clock);
     assert_eq!(u1.status.scan_seq, 1);
     assert_eq!(u1.status.pending.len(), 1);
+    assert_eq!(u1.status.pending[0].wait, PendingWait::IdleConfirming);
     assert!(probe.log.sent().is_empty());
+    wait_idle(&clock);
 
     let u2 = scan(&mut e, &clock);
     assert_eq!(probe.log.sent(), vec![(101, libc::SIGTERM)]);
@@ -78,8 +85,13 @@ fn safe_auto_terminates_through_plan_execute_with_audit_event_and_notification()
     assert_eq!(ev.reclaimed_bytes, 100 * 1024 * 1024);
     assert_eq!(ev.run_id.as_deref(), Some("guard-2"));
     assert_eq!(count(&u2.new_events, GuardEventKind::Notified), 1);
-    assert_eq!(probe.notifications().len(), 1);
-    assert!(probe.notifications()[0].1.contains("종료"));
+    assert_eq!(
+        probe.notifications().len(),
+        2,
+        "불안정 전환 1 + 자동 조치 1"
+    );
+    assert!(probe.notifications()[0].1.contains("불안정"));
+    assert!(probe.notifications()[1].1.contains("종료"));
     assert_eq!(u2.status.terminations_in_window, 1);
     assert!(u2.status.pending.is_empty());
 
@@ -103,7 +115,7 @@ fn safe_auto_terminates_through_plan_execute_with_audit_event_and_notification()
 
 #[test]
 fn every_signal_goes_through_execute_audit_matches_signaler() {
-    let mut sc = Scene::new();
+    let mut sc = Scene::unstable();
     sc.leftover(
         101,
         Kind::McpServer,
@@ -119,8 +131,11 @@ fn every_signal_goes_through_execute_audit_matches_signaler() {
         Some(false),
     );
     let r = sc.plain(103, Kind::Watcher, OLD);
+    sc.health = HealthLevel::Critical;
     let (mut e, probe, clock) = engine_for(&sc, safe());
-    for _ in 0..4 {
+    scan(&mut e, &clock);
+    wait_idle(&clock);
+    for _ in 0..3 {
         scan(&mut e, &clock);
     }
     let u = scan(&mut e, &clock);
@@ -146,7 +161,7 @@ fn every_signal_goes_through_execute_audit_matches_signaler() {
 
 #[test]
 fn protection_rules_refuse_even_when_decide_said_yes() {
-    let mut sc = Scene::new();
+    let mut sc = Scene::unstable();
     let t = sc.leftover(
         101,
         Kind::McpServer,
@@ -157,6 +172,7 @@ fn protection_rules_refuse_even_when_decide_said_yes() {
     sc.procs.iter_mut().find(|p| p.pid == 101).unwrap().exe = Some("/System/Library/x".into());
     let (mut e, probe, clock) = engine_for(&sc, safe());
     scan(&mut e, &clock);
+    wait_idle(&clock);
     let u2 = scan(&mut e, &clock);
     assert!(probe.log.sent().is_empty());
     let refused: Vec<_> = u2
@@ -182,7 +198,7 @@ fn protection_rules_refuse_even_when_decide_said_yes() {
 
 #[test]
 fn rate_limit_trips_circuit_then_notify_only_until_reset() {
-    let mut sc = Scene::new();
+    let mut sc = Scene::unstable();
     for pid in 101..=106 {
         sc.leftover(
             pid,
@@ -192,15 +208,25 @@ fn rate_limit_trips_circuit_then_notify_only_until_reset() {
             Some(false),
         );
     }
+    sc.health = HealthLevel::Critical;
     let (mut e, probe, clock) = engine_for(&sc, safe());
     scan(&mut e, &clock);
+    wait_idle(&clock);
     let u2 = scan(&mut e, &clock);
     assert!(probe.log.sent().is_empty(), "할당량을 넘는 스캔은 0건 실행");
     assert!(u2.status.circuit_open);
-    assert_eq!(u2.status.circuit_opened_at_unix_ms, Some(T0 + 5000));
+    assert_eq!(u2.status.circuit_opened_at_unix_ms, Some(T0 + 120_000));
     assert_eq!(count(&u2.new_events, GuardEventKind::CircuitOpen), 1);
-    assert_eq!(probe.notifications().len(), 1);
-    assert!(probe.notifications()[0].1.contains("멈췄어요"));
+    assert_eq!(
+        probe.notifications().len(),
+        2,
+        "불안정 전환 1 + 차단기 요약 1"
+    );
+    assert!(probe.notifications()[1].1.contains("멈췄어요"));
+    assert!(
+        !probe.notifications()[1].1.contains("McpServer"),
+        "항목 줄 없음"
+    );
 
     clock.advance(60_000);
     let u3 = scan(&mut e, &clock);
@@ -231,7 +257,7 @@ fn rate_limit_trips_circuit_then_notify_only_until_reset() {
 
 #[test]
 fn pause_blocks_everything_and_resume_needs_fresh_confirmation() {
-    let mut sc = Scene::new();
+    let mut sc = Scene::unstable();
     sc.leftover(
         101,
         Kind::McpServer,
@@ -252,6 +278,7 @@ fn pause_blocks_everything_and_resume_needs_fresh_confirmation() {
     assert!(probe.log.sent().is_empty());
     let u = e.handle(GuardCommand::Resume).unwrap();
     assert_eq!(kinds(&u.new_events), vec![GuardEventKind::Resumed]);
+    wait_idle(&clock);
     scan(&mut e, &clock);
     assert!(probe.log.sent().is_empty(), "재개 뒤 첫 스캔은 1/2");
     scan(&mut e, &clock);
@@ -260,7 +287,7 @@ fn pause_blocks_everything_and_resume_needs_fresh_confirmation() {
 
 #[test]
 fn set_level_changes_policy_and_env_lock_refuses() {
-    let mut sc = Scene::new();
+    let mut sc = Scene::unstable();
     sc.leftover(
         101,
         Kind::McpServer,
@@ -284,9 +311,10 @@ fn set_level_changes_policy_and_env_lock_refuses() {
     assert_eq!(
         probe.notifications().len(),
         1,
-        "알림만 수준: 후보를 한 번 알림"
+        "보고만 수준: 항목 알림 없음(첫 스캔의 불안정 전환 알림 1건뿐)"
     );
     e.handle(GuardCommand::SetLevel(AutoLevel::Safe)).unwrap();
+    wait_idle(&clock);
     scan(&mut e, &clock);
     assert!(probe.log.sent().is_empty());
     scan(&mut e, &clock);
@@ -320,7 +348,7 @@ fn set_scan_interval_updates_policy_and_next_scan() {
 
 #[test]
 fn manual_demote_undo_restores_and_events_dedupe() {
-    let mut sc = Scene::new();
+    let mut sc = Scene::unstable();
     let r = sc.plain(201, Kind::DevServer, OLD);
     let (mut e, probe, clock) = engine_for(&sc, safe());
     let u1 = scan(&mut e, &clock);
@@ -354,7 +382,7 @@ fn manual_demote_undo_restores_and_events_dedupe() {
 
 #[test]
 fn shutdown_restores_all_demoted_and_reports_vanished_without_signal() {
-    let mut sc = Scene::new();
+    let mut sc = Scene::unstable();
     let a = sc.plain(201, Kind::DevServer, OLD);
     let b = sc.plain(202, Kind::Watcher, OLD);
     let (mut e, probe, clock) = engine_for(&sc, safe());
@@ -372,7 +400,7 @@ fn shutdown_restores_all_demoted_and_reports_vanished_without_signal() {
 
 #[test]
 fn shutdown_failure_is_reported_with_errno() {
-    let mut sc = Scene::new();
+    let mut sc = Scene::unstable();
     let a = sc.plain(201, Kind::DevServer, OLD);
     let (mut e, probe, clock) = engine_for(&sc, safe());
     let u = scan(&mut e, &clock);
@@ -393,7 +421,7 @@ fn shutdown_failure_is_reported_with_errno() {
 
 #[test]
 fn manual_run_plan_does_not_count_and_its_demote_is_restored_at_shutdown() {
-    let mut sc = Scene::new();
+    let mut sc = Scene::unstable();
     let t = sc.leftover(101, Kind::McpServer, Confidence::Likely, OLD, Some(false));
     let d = sc.plain(202, Kind::DevServer, OLD);
     sc.findings.push(finding(
@@ -447,27 +475,47 @@ fn manual_run_plan_does_not_count_and_its_demote_is_restored_at_shutdown() {
 
 #[test]
 fn notifications_batch_per_scan_and_respect_30s() {
-    let mut sc = Scene::new();
-    sc.leftover(101, Kind::Emulator, Confidence::Confirmed, OLD, Some(false));
-    sc.leftover(102, Kind::LocalLlm, Confidence::Confirmed, OLD, Some(false));
+    let mut sc = Scene::unstable();
+    sc.health = HealthLevel::Critical;
+    sc.leftover(
+        101,
+        Kind::McpServer,
+        Confidence::Confirmed,
+        OLD,
+        Some(false),
+    );
+    sc.leftover(
+        102,
+        Kind::DevServer,
+        Confidence::Confirmed,
+        OLD,
+        Some(false),
+    );
     let (mut e, probe, clock) = engine_for(&sc, safe());
     scan(&mut e, &clock);
-    assert_eq!(probe.notifications().len(), 1, "두 알림 후보 → 한 알림");
-    let body = &probe.notifications()[0].1;
+    assert_eq!(
+        probe.notifications().len(),
+        1,
+        "불안정 전환 요약 1건(항목 줄 없음)"
+    );
+    wait_idle(&clock);
+    scan(&mut e, &clock);
+    assert_eq!(
+        probe.notifications().len(),
+        2,
+        "한 스캔의 두 종료 → 한 알림"
+    );
+    let body = &probe.notifications()[1].1;
     assert!(
-        body.contains("Emulator 101") && body.contains("LocalLlm 102"),
+        body.contains("McpServer 101") && body.contains("DevServer 102"),
         "{body}"
     );
     for _ in 0..5 {
         scan(&mut e, &clock);
     }
-    assert_eq!(
-        probe.notifications().len(),
-        1,
-        "같은 (대상, 사유)는 다시 알리지 않는다"
-    );
+    assert_eq!(probe.notifications().len(), 2, "할 일이 없으면 알림 없음");
 
-    sc.leftover(103, Kind::Tunnel, Confidence::Confirmed, OLD, Some(false));
+    sc.leftover(103, Kind::Watcher, Confidence::Confirmed, OLD, Some(false));
     let (s, r) = sc.build(clock.now());
     e.backend_mut().script.clear();
     e.backend_mut().push_script(s, r);
@@ -480,34 +528,37 @@ fn notifications_batch_per_scan_and_respect_30s() {
             Some("/opt/homebrew/bin/p103"),
         ));
     });
+    scan(&mut e, &clock);
+    wait_idle(&clock);
     let u = scan(&mut e, &clock);
-    assert_eq!(probe.notifications().len(), 2);
+    assert_eq!(probe.notifications().len(), 3);
     assert_eq!(count(&u.new_events, GuardEventKind::Notified), 1);
-    assert!(probe.notifications()[1].1.contains("Tunnel 103"));
+    assert!(probe.notifications()[2].1.contains("Watcher 103"));
 }
 
 #[test]
 fn notification_rate_limit_queues_and_merges() {
     let mut sc = Scene::new();
-    sc.leftover(101, Kind::Emulator, Confidence::Confirmed, OLD, Some(false));
+    sc.leftover(
+        101,
+        Kind::McpServer,
+        Confidence::Confirmed,
+        OLD,
+        Some(false),
+    );
     let (mut e, probe, clock) = engine_for(&sc, safe());
     e.scan();
-    assert_eq!(probe.notifications().len(), 1);
-    clock.advance(5000);
-    sc.leftover(102, Kind::LocalLlm, Confidence::Confirmed, OLD, Some(false));
+    assert!(probe.notifications().is_empty(), "정상: 알림 0");
+    clock.advance(120_000);
+    sc.health = HealthLevel::Watch;
     let (s, r) = sc.build(clock.now());
     e.backend_mut().script.clear();
     e.backend_mut().push_script(s, r);
-    probe.world.with(|w| {
-        w.insert(vh_act::LiveProc::alive(
-            102,
-            OLD,
-            1,
-            UID,
-            Some("/opt/homebrew/bin/p102"),
-        ));
-    });
+    e.scan();
+    assert_eq!(probe.notifications().len(), 1, "불안정 전환 요약");
+    clock.advance(5000);
     let u = e.scan().unwrap();
+    assert_eq!(probe.log.sent(), vec![(101, libc::SIGTERM)]);
     assert_eq!(
         probe.notifications().len(),
         1,
@@ -517,13 +568,13 @@ fn notification_rate_limit_queues_and_merges() {
     clock.advance(30_000);
     let u = e.scan().unwrap();
     assert_eq!(probe.notifications().len(), 2);
-    assert!(probe.notifications()[1].1.contains("LocalLlm 102"));
+    assert!(probe.notifications()[1].1.contains("McpServer 101"));
     assert_eq!(count(&u.new_events, GuardEventKind::Notified), 1);
 }
 
 #[test]
 fn collect_error_becomes_scan_error_and_keeps_last_snapshot() {
-    let mut sc = Scene::new();
+    let mut sc = Scene::unstable();
     sc.plain(101, Kind::DevServer, OLD);
     let (mut e, probe, clock) = engine_for(&sc, safe());
     scan(&mut e, &clock);
@@ -556,7 +607,7 @@ fn first_collect_error_yields_no_update_then_recovers() {
 
 #[test]
 fn cpu_pct_is_filled_from_previous_scan_and_analyze_gets_interval() {
-    let mut sc = Scene::new();
+    let mut sc = Scene::unstable();
     sc.plain(101, Kind::DevServer, OLD);
     let (mut e, _probe, clock) = engine_for(&sc, safe());
     e.backend_mut().cpu_rate_pct.insert(101, 40.0);
@@ -573,7 +624,7 @@ fn cpu_pct_is_filled_from_previous_scan_and_analyze_gets_interval() {
 
 #[test]
 fn status_reflects_memory() {
-    let mut sc = Scene::new();
+    let mut sc = Scene::unstable();
     sc.leftover(
         101,
         Kind::McpServer,
@@ -587,8 +638,15 @@ fn status_reflects_memory() {
     assert!(!u.status.level_locked_by_env);
     assert!(!u.status.paused && !u.status.circuit_open);
     assert_eq!(u.status.last_scan_at_unix_ms, T0);
-    assert_eq!(u.status.next_scan_at_unix_ms, T0 + 5000);
+    assert_eq!(u.status.next_scan_at_unix_ms, T0 + 2000, "불안정 중 2초");
     assert_eq!(u.status.pending[0].kind, Kind::McpServer);
+    assert_eq!(u.status.pending[0].wait, PendingWait::IdleConfirming);
+    assert!(u.status.unstable);
+    assert_eq!(u.status.health, HealthLevel::Watch);
+    assert_eq!(u.status.health_forced, None);
+    assert_eq!(u.status.unstable_reasons, vec![UnstableReason::HealthWatch]);
+    assert_eq!(u.status.unstable_since_unix_ms, Some(T0));
+    assert_eq!(u.status.settle_until_unix_ms, None);
     assert_eq!(*u.policy, safe());
     assert!(u.manual_result.is_none());
 }
@@ -606,7 +664,7 @@ fn demote_201(e: &mut Engine<FakeGuardBackend>, probe: &Probe, clock: &FakeClock
 
 #[test]
 fn vanished_demoted_is_pruned_on_next_scan_once_without_signal() {
-    let mut sc = Scene::new();
+    let mut sc = Scene::unstable();
     sc.plain(201, Kind::DevServer, OLD);
     let (mut e, probe, clock) = engine_for(&sc, safe());
     demote_201(&mut e, &probe, &clock);
@@ -634,7 +692,7 @@ fn vanished_demoted_is_pruned_on_next_scan_once_without_signal() {
 
 #[test]
 fn pid_reuse_of_demoted_counts_as_gone_without_signal() {
-    let mut sc = Scene::new();
+    let mut sc = Scene::unstable();
     sc.plain(201, Kind::DevServer, OLD);
     let (mut e, probe, clock) = engine_for(&sc, safe());
     demote_201(&mut e, &probe, &clock);
@@ -648,7 +706,7 @@ fn pid_reuse_of_demoted_counts_as_gone_without_signal() {
             Some("/opt/homebrew/bin/p201"),
         ));
     });
-    let mut sc2 = Scene::new();
+    let mut sc2 = Scene::unstable();
     sc2.plain(201, Kind::DevServer, OLD + 1);
     let (s, r) = sc2.build(clock.now());
     e.backend_mut().script.clear();
@@ -661,7 +719,7 @@ fn pid_reuse_of_demoted_counts_as_gone_without_signal() {
 
 #[test]
 fn gone_undemote_failure_is_not_retried_every_scan_but_at_shutdown() {
-    let mut sc = Scene::new();
+    let mut sc = Scene::unstable();
     let a = sc.plain(201, Kind::DevServer, OLD);
     let (mut e, probe, clock) = engine_for(&sc, safe());
     demote_201(&mut e, &probe, &clock);
@@ -670,7 +728,7 @@ fn gone_undemote_failure_is_not_retried_every_scan_but_at_shutdown() {
         log: probe.log.clone(),
         fail_with: Some(libc::EPERM),
     });
-    let (s, r) = Scene::new().build(clock.now());
+    let (s, r) = Scene::unstable().build(clock.now());
     e.backend_mut().script.clear();
     e.backend_mut().push_script(s, r);
     let u = scan(&mut e, &clock);
@@ -691,7 +749,7 @@ fn gone_undemote_failure_is_not_retried_every_scan_but_at_shutdown() {
 
 #[test]
 fn buffered_events_capped_keeping_latest() {
-    let sc = Scene::new();
+    let sc = Scene::unstable();
     let (mut e, probe, _clock) = engine_for(&sc, safe());
     for i in 0..150 {
         probe.set_collect_error(Some(&format!("x{i}")));
@@ -713,7 +771,7 @@ fn buffered_events_capped_keeping_latest() {
 
 #[test]
 fn policy_arc_is_shared_until_changed() {
-    let sc = Scene::new();
+    let sc = Scene::unstable();
     let (mut e, _probe, clock) = engine_for(&sc, safe());
     let u1 = scan(&mut e, &clock);
     let u2 = scan(&mut e, &clock);
@@ -730,16 +788,31 @@ fn policy_arc_is_shared_until_changed() {
 
 #[test]
 fn notifications_distinguish_same_named_targets() {
-    let mut sc = Scene::new();
-    sc.leftover(101, Kind::Emulator, Confidence::Confirmed, OLD, Some(false));
-    sc.leftover(102, Kind::Emulator, Confidence::Confirmed, OLD, Some(false));
+    let mut sc = Scene::unstable();
+    sc.health = HealthLevel::Critical;
+    sc.leftover(
+        101,
+        Kind::McpServer,
+        Confidence::Confirmed,
+        OLD,
+        Some(false),
+    );
+    sc.leftover(
+        102,
+        Kind::McpServer,
+        Confidence::Confirmed,
+        OLD,
+        Some(false),
+    );
     for c in &mut sc.classified {
         c.label_ko = "MCP 서버: chrome-devtools".into();
     }
     sc.classified[0].project = Some("~/dev/alpha".into());
     let (mut e, probe, clock) = engine_for(&sc, safe());
     scan(&mut e, &clock);
-    let body = &probe.notifications()[0].1;
+    wait_idle(&clock);
+    scan(&mut e, &clock);
+    let body = &probe.notifications()[1].1;
     assert!(body.contains("MCP 서버: chrome-devtools (alpha)"), "{body}");
     assert!(
         body.contains("MCP 서버: chrome-devtools (pid 102)"),
@@ -749,12 +822,14 @@ fn notifications_distinguish_same_named_targets() {
 
 #[test]
 fn young_orphan_pending_shows_in_status_without_signal() {
-    let mut sc = Scene::new();
+    let mut sc = Scene::unstable();
     let p = proc_(101, 1, UID, T0 - 9 * 60_000, "p101");
     let r = pref(&p);
     sc.procs.push(p);
-    sc.classified
-        .push(classified(r, Kind::McpServer, "MCP 서버: x", None));
+    let mut c = classified(r, Kind::McpServer, "MCP 서버: x", None);
+    c.usage.state = UsageState::Active;
+    c.usage.reasons.push(UsageReason::Young);
+    sc.classified.push(c);
     let mut f = finding(
         "orphan:101",
         FindingKind::Orphan,
@@ -775,7 +850,7 @@ fn young_orphan_pending_shows_in_status_without_signal() {
 
 #[test]
 fn bulk_run_plan_rechecks_in_use_before_execute_pointed_does_not() {
-    let mut sc = Scene::new();
+    let mut sc = Scene::unstable();
     let t = sc.leftover(
         101,
         Kind::McpServer,

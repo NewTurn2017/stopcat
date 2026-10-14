@@ -2,7 +2,7 @@
 
 use vh_guard::decide::{SkipReason, decide, decide_lean};
 use vh_guard::fake::*;
-use vh_guard::memory::{CpuStreak, GuardMemory};
+use vh_guard::memory::GuardMemory;
 use vh_guard::{AutoLevel, GuardPolicy};
 use vh_model::*;
 
@@ -14,19 +14,20 @@ fn mem(level: AutoLevel) -> GuardMemory {
 
 fn apply(m: &mut GuardMemory, d: &vh_guard::Decisions) {
     m.term_streak = d.next_term_streak.clone();
-    m.cpu_streak = d.next_cpu_streak.clone();
 }
 
+/// 지킴이가 이미 2분 넘게 '안 씀'을 본 기억에서 시작해 5초 간격으로 n번 판정한다(엔진과 같은 순서: observe → decide).
 fn run_scans(
     scene: &Scene,
     policy: &GuardPolicy,
     n: usize,
 ) -> (GuardMemory, Vec<vh_guard::Decisions>) {
-    let mut m = mem(policy.level);
+    let mut m = observed_idle_mem(scene, policy, T0);
     let mut out = Vec::new();
     for i in 0..n {
         let now = T0 + i as u64 * 5000;
         let (s, r) = scene.build(now);
+        vh_guard::observe(&mut m, &s, &r, None, policy, now);
         let d = decide(&m, &s, &r, policy, now);
         apply(&mut m, &d);
         out.push(d);
@@ -36,7 +37,7 @@ fn run_scans(
 
 #[test]
 fn safe_confirmed_mcp_terminates_after_two_scans() {
-    let mut sc = Scene::new();
+    let mut sc = Scene::unstable();
     let t = sc.leftover(
         101,
         Kind::McpServer,
@@ -52,7 +53,11 @@ fn safe_confirmed_mcp_terminates_after_two_scans() {
         (1, 2)
     );
     assert_eq!(ds[0].pending[0].step, Step::Term);
-    assert_eq!(ds[0].pending[0].eta_ms, Some(5000));
+    assert_eq!(
+        ds[0].pending[0].eta_ms,
+        Some(2000),
+        "불안정 중 스캔 간격 2초"
+    );
     assert_eq!(ds[1].terminate.len(), 1);
     assert_eq!(ds[1].terminate[0].target, t);
     assert_eq!(ds[1].terminate[0].step, Step::Term);
@@ -62,7 +67,7 @@ fn safe_confirmed_mcp_terminates_after_two_scans() {
 
 #[test]
 fn one_scan_is_not_enough() {
-    let mut sc = Scene::new();
+    let mut sc = Scene::unstable();
     sc.leftover(101, Kind::DevServer, Confidence::Confirmed, OLD, None);
     let (_, ds) = run_scans(&sc, &safe(), 1);
     assert!(ds[0].terminate.is_empty());
@@ -76,7 +81,7 @@ fn one_scan_is_not_enough() {
 
 #[test]
 fn too_young_is_skipped_with_eta_and_no_streak() {
-    let mut sc = Scene::new();
+    let mut sc = Scene::unstable();
     let young = T0 - 9 * 60_000;
     sc.leftover(101, Kind::McpServer, Confidence::Confirmed, young, None);
     let (m, ds) = run_scans(&sc, &safe(), 3);
@@ -92,7 +97,7 @@ fn too_young_is_skipped_with_eta_and_no_streak() {
 #[test]
 fn owner_alive_never_terminates_in_any_level() {
     for policy in [safe(), aggressive()] {
-        let mut sc = Scene::new();
+        let mut sc = Scene::unstable();
         sc.leftover(101, Kind::McpServer, Confidence::Confirmed, OLD, Some(true));
         let (_, ds) = run_scans(&sc, &policy, 3);
         assert!(
@@ -110,17 +115,20 @@ fn owner_alive_never_terminates_in_any_level() {
 }
 
 #[test]
-fn safe_emulator_is_notify_only() {
-    let mut sc = Scene::new();
+fn safe_emulator_is_report_only_without_item_notification() {
+    let mut sc = Scene::unstable();
     let t = sc.leftover(101, Kind::Emulator, Confidence::Confirmed, OLD, None);
     let (_, ds) = run_scans(&sc, &safe(), 3);
     assert!(
         ds.iter()
             .all(|d| d.terminate.is_empty() && d.pending.is_empty())
     );
-    let n = &ds[0].notify;
-    assert_eq!(n.len(), 1);
-    assert_eq!((n[0].target, n[0].reason), (t, SkipReason::KindNotifyOnly));
+    assert!(
+        ds[0]
+            .skipped
+            .iter()
+            .any(|s| s.target == t && s.reason == SkipReason::KindNotifyOnly)
+    );
 }
 
 #[test]
@@ -132,7 +140,7 @@ fn protected_kinds_never_in_any_level_not_even_notify() {
         Kind::Database,
     ] {
         for policy in [notify_only(), safe(), aggressive()] {
-            let mut sc = Scene::new();
+            let mut sc = Scene::unstable();
             sc.leftover(101, kind, Confidence::Confirmed, OLD, Some(false));
             let (_, ds) = run_scans(&sc, &policy, 3);
             for d in &ds {
@@ -146,13 +154,12 @@ fn protected_kinds_never_in_any_level_not_even_notify() {
                     policy.level
                 );
             }
-            let notified_vm_db = ds[0]
-                .notify
-                .iter()
-                .any(|n| n.reason == SkipReason::KindNotifyOnly);
             assert!(
-                !notified_vm_db,
-                "보호 Kind는 알림 목록 전에 걸러진다: {kind:?}"
+                !ds[0]
+                    .skipped
+                    .iter()
+                    .any(|s| s.reason == SkipReason::KindNotifyOnly),
+                "보호 Kind는 보고만 종류 판정 전에 걸러진다: {kind:?}"
             );
         }
     }
@@ -160,7 +167,7 @@ fn protected_kinds_never_in_any_level_not_even_notify() {
 
 #[test]
 fn likely_is_safe_skip_but_aggressive_candidate_and_possible_never() {
-    let mut sc = Scene::new();
+    let mut sc = Scene::unstable();
     sc.leftover(101, Kind::DevServer, Confidence::Likely, OLD, Some(false));
     let (_, ds) = run_scans(&sc, &safe(), 2);
     assert!(ds[1].terminate.is_empty());
@@ -173,7 +180,7 @@ fn likely_is_safe_skip_but_aggressive_candidate_and_possible_never() {
     let (_, da) = run_scans(&sc, &aggressive(), 2);
     assert_eq!(da[1].terminate.len(), 1);
 
-    let mut sp = Scene::new();
+    let mut sp = Scene::unstable();
     sp.leftover(102, Kind::DevServer, Confidence::Possible, OLD, Some(false));
     for policy in [safe(), aggressive()] {
         let (_, dp) = run_scans(&sp, &policy, 3);
@@ -187,12 +194,13 @@ fn likely_is_safe_skip_but_aggressive_candidate_and_possible_never() {
 
 #[test]
 fn aggressive_takes_emulator_and_sorts_largest_first_under_pressure_4() {
-    let mut sc = Scene::new();
+    let mut sc = Scene::unstable();
     let small = sc.leftover(101, Kind::Emulator, Confidence::Confirmed, OLD, Some(false));
     let big = sc.leftover(102, Kind::DevServer, Confidence::Likely, OLD, Some(false));
     sc.findings[1].reclaim_bytes = 7 * 1024 * 1024 * 1024;
+    sc.health = HealthLevel::Critical;
     let policy = aggressive();
-    let mut m = mem(policy.level);
+    let mut m = observed_idle_mem(&sc, &policy, T0);
     for i in 0..2 {
         let now = T0 + i * 5000;
         let (s, r) = sc.build_pressure(now, 4);
@@ -200,18 +208,24 @@ fn aggressive_takes_emulator_and_sorts_largest_first_under_pressure_4() {
         apply(&mut m, &d);
         if i == 1 {
             let order: Vec<ProcRef> = d.terminate.iter().map(|c| c.target).collect();
-            assert_eq!(order, vec![big, small]);
+            assert_eq!(order, vec![big, small], "위험: 할당량 안 전부, 큰 것부터");
         }
     }
-    let (s, r) = sc.build_pressure(T0 + 10_000, 1);
+    sc.health = HealthLevel::Watch;
+    let (s, r) = sc.build_pressure(T0 + 10_000, 2);
     let d = decide(&m, &s, &r, &policy, T0 + 10_000);
     let order: Vec<ProcRef> = d.terminate.iter().map(|c| c.target).collect();
-    assert_eq!(order, vec![small, big], "압력 1이면 리포트 순서");
+    assert_eq!(order, vec![big], "주의: 회차당 큰 것 1개(W4 Q3)");
+    assert_eq!(d.pending.len(), 1);
+    assert_eq!(
+        (d.pending[0].target, d.pending[0].wait),
+        (small, PendingWait::RoundLimit)
+    );
 }
 
 #[test]
-fn notify_only_level_has_no_actions_only_notify_items() {
-    let mut sc = Scene::new();
+fn notify_only_level_has_no_actions_and_no_item_notification() {
+    let mut sc = Scene::unstable();
     sc.leftover(
         101,
         Kind::McpServer,
@@ -220,9 +234,8 @@ fn notify_only_level_has_no_actions_only_notify_items() {
         Some(false),
     );
     let r = sc.plain(102, Kind::DevServer, OLD);
-    let mut policy = notify_only();
-    policy.runaway_sustained_scans = 1;
-    let mut m = mem(policy.level);
+    let policy = notify_only();
+    let mut m = observed_idle_mem(&sc, &policy, T0);
     for i in 0..3u64 {
         let now = T0 + i * 5000;
         let (mut s, rep) = sc.build(now);
@@ -234,14 +247,17 @@ fn notify_only_level_has_no_actions_only_notify_items() {
         let d = decide(&m, &s, &rep, &policy, now);
         apply(&mut m, &d);
         assert!(d.terminate.is_empty() && d.demote.is_empty() && d.pending.is_empty());
-        assert_eq!(d.notify.len(), 1);
-        assert_eq!(d.notify[0].reason, SkipReason::LevelNotifyOnly);
+        assert!(
+            d.skipped
+                .iter()
+                .any(|s| s.reason == SkipReason::LevelNotifyOnly)
+        );
     }
 }
 
 #[test]
 fn paused_memory_yields_nothing() {
-    let mut sc = Scene::new();
+    let mut sc = Scene::unstable();
     sc.leftover(
         101,
         Kind::McpServer,
@@ -253,12 +269,12 @@ fn paused_memory_yields_nothing() {
     m.paused = true;
     let (s, r) = sc.build(T0);
     let d = decide(&m, &s, &r, &safe(), T0);
-    assert!(d.terminate.is_empty() && d.pending.is_empty() && d.notify.is_empty());
+    assert!(d.terminate.is_empty() && d.pending.is_empty());
     assert!(d.next_term_streak.is_empty());
 }
 
 fn cpu_scene(kind: Kind) -> (Scene, ProcRef) {
-    let mut sc = Scene::new();
+    let mut sc = Scene::unstable();
     let r = sc.plain(201, kind, OLD);
     (sc, r)
 }
@@ -285,38 +301,26 @@ fn decide_cpu(
 #[test]
 fn runaway_three_scans_then_demote_and_a_dip_resets() {
     let (sc, r) = cpu_scene(Kind::DevServer);
-    let policy = safe();
-    let mut m = mem(policy.level);
-    let d1 = decide_cpu(&sc, &mut m, &policy, r.pid, Some(150.0), T0);
-    assert!(d1.demote.is_empty());
-    assert_eq!(
-        (d1.pending[0].step, d1.pending[0].seen_scans),
-        (Step::Demote, 1)
-    );
-    let d2 = decide_cpu(&sc, &mut m, &policy, r.pid, Some(120.0), T0 + 5000);
-    assert_eq!(d2.pending[0].seen_scans, 2);
-    let d3 = decide_cpu(&sc, &mut m, &policy, r.pid, Some(100.0), T0 + 10_000);
-    assert_eq!(d3.demote.len(), 1);
-    assert_eq!(d3.demote[0].target, r);
-    assert_eq!(d3.demote[0].step, Step::Demote);
-    assert_eq!(
-        d3.demote[0].finding_id,
-        format!("guard-runaway:{}:{}", r.pid, r.start_time_unix_ms)
-    );
-
-    let mut m2 = mem(policy.level);
-    decide_cpu(&sc, &mut m2, &policy, r.pid, Some(150.0), T0);
-    decide_cpu(&sc, &mut m2, &policy, r.pid, Some(50.0), T0 + 5000);
-    assert!(m2.cpu_streak.is_empty());
-    let d = decide_cpu(&sc, &mut m2, &policy, r.pid, Some(150.0), T0 + 10_000);
-    assert_eq!(d.pending[0].seen_scans, 1);
-    assert_eq!(
-        m2.cpu_streak[&r],
-        CpuStreak {
-            seen: 1,
-            last_pct: 150.0
+    for policy in [notify_only(), safe(), aggressive()] {
+        for health in [HealthLevel::Ok, HealthLevel::Watch, HealthLevel::Critical] {
+            let mut sc = cpu_scene(Kind::DevServer).0;
+            sc.health = health;
+            let mut m = mem(policy.level);
+            for (i, pct) in [150.0, 120.0, 100.0, 50.0, 150.0, 300.0]
+                .into_iter()
+                .enumerate()
+            {
+                let d = decide_cpu(&sc, &mut m, &policy, r.pid, Some(pct), T0 + i as u64 * 5000);
+                assert!(
+                    d.demote.is_empty(),
+                    "W4: CPU가 높아도 자동 낮추기 없음 {:?} {health:?}",
+                    policy.level
+                );
+                assert!(d.pending.iter().all(|p| p.step == Step::Term));
+            }
         }
-    );
+    }
+    let _ = sc;
 }
 
 #[test]
@@ -341,21 +345,12 @@ fn runaway_protected_notify_only_and_app_helper_never_demote() {
         let (sc, r) = cpu_scene(kind);
         let policy = safe();
         let mut m = mem(policy.level);
-        let mut notified = 0;
         for i in 0..4u64 {
             let d = decide_cpu(&sc, &mut m, &policy, r.pid, Some(300.0), T0 + i * 5000);
             assert!(d.demote.is_empty(), "{kind:?}");
             assert!(d.pending.is_empty(), "{kind:?}");
-            notified += d
-                .notify
-                .iter()
-                .filter(|n| n.reason == SkipReason::RunawayNoDemote)
-                .count();
+            assert!(d.terminate.is_empty(), "{kind:?}");
         }
-        assert_eq!(
-            notified, 2,
-            "{kind:?}: 3회째부터 매 스캔 알림 후보(엔진이 중복을 거른다)"
-        );
     }
 }
 
@@ -374,12 +369,7 @@ fn runaway_already_demoted_is_not_redone() {
     );
     for i in 0..4u64 {
         let d = decide_cpu(&sc, &mut m, &policy, r.pid, Some(300.0), T0 + i * 5000);
-        assert!(d.demote.is_empty());
-        assert!(
-            d.skipped
-                .iter()
-                .any(|s| s.reason == SkipReason::AlreadyDemoted)
-        );
+        assert!(d.demote.is_empty() && d.terminate.is_empty() && d.pending.is_empty());
     }
 }
 
@@ -396,7 +386,7 @@ fn notify_only_level_never_demotes() {
 
 #[test]
 fn quota_exceeded_executes_nothing_and_trips_circuit() {
-    let mut sc = Scene::new();
+    let mut sc = Scene::unstable();
     for pid in 101..=106 {
         sc.leftover(
             pid,
@@ -411,7 +401,7 @@ fn quota_exceeded_executes_nothing_and_trips_circuit() {
     assert!(d.trip_circuit);
     assert!(d.terminate.is_empty());
     assert_eq!(
-        d.notify
+        d.skipped
             .iter()
             .filter(|n| n.reason == SkipReason::QuotaExceeded)
             .count(),
@@ -421,7 +411,7 @@ fn quota_exceeded_executes_nothing_and_trips_circuit() {
 
 #[test]
 fn quota_counts_only_window_and_circuit_open_notifies_only() {
-    let mut sc = Scene::new();
+    let mut sc = Scene::unstable();
     sc.leftover(
         101,
         Kind::McpServer,
@@ -430,7 +420,7 @@ fn quota_counts_only_window_and_circuit_open_notifies_only() {
         Some(false),
     );
     let policy = safe();
-    let mut m = mem(policy.level);
+    let mut m = observed_idle_mem(&sc, &policy, T0);
     for _ in 0..5 {
         m.terminations.push_back(T0 - 60_000);
     }
@@ -441,7 +431,7 @@ fn quota_counts_only_window_and_circuit_open_notifies_only() {
     let d2 = decide(&m, &s, &r, &policy, T0 + 5000);
     assert!(d2.trip_circuit && d2.terminate.is_empty());
 
-    let mut old = mem(policy.level);
+    let mut old = observed_idle_mem(&sc, &policy, T0);
     for _ in 0..5 {
         old.terminations.push_back(T0 - 11 * 60_000);
     }
@@ -452,18 +442,22 @@ fn quota_counts_only_window_and_circuit_open_notifies_only() {
     let o2 = decide(&old, &s, &r, &policy, T0 + 5000);
     assert_eq!(o2.terminate.len(), 1, "창 밖 기록은 세지 않는다");
 
-    let mut open = mem(policy.level);
+    let mut open = observed_idle_mem(&sc, &policy, T0);
     open.circuit_open = true;
     open.term_streak = m.term_streak.clone();
     let (s, r) = sc.build(T0 + 5000);
     let o = decide(&open, &s, &r, &policy, T0 + 5000);
     assert!(o.terminate.is_empty() && !o.trip_circuit);
-    assert_eq!(o.notify[0].reason, SkipReason::CircuitOpen);
+    assert!(
+        o.skipped
+            .iter()
+            .any(|s| s.reason == SkipReason::CircuitOpen)
+    );
 }
 
 #[test]
 fn pid_reuse_is_a_new_procref_and_restarts_the_streak() {
-    let mut sc = Scene::new();
+    let mut sc = Scene::unstable();
     sc.leftover(
         101,
         Kind::McpServer,
@@ -472,11 +466,11 @@ fn pid_reuse_is_a_new_procref_and_restarts_the_streak() {
         Some(false),
     );
     let policy = safe();
-    let mut m = mem(policy.level);
+    let mut m = observed_idle_mem(&sc, &policy, T0);
     let (s, r) = sc.build(T0);
     let d = decide(&m, &s, &r, &policy, T0);
     apply(&mut m, &d);
-    let mut sc2 = Scene::new();
+    let mut sc2 = Scene::unstable();
     sc2.leftover(
         101,
         Kind::McpServer,
@@ -485,14 +479,20 @@ fn pid_reuse_is_a_new_procref_and_restarts_the_streak() {
         Some(false),
     );
     let (s, r) = sc2.build(T0 + 5000);
+    vh_guard::observe(&mut m, &s, &r, None, &policy, T0 + 5000);
     let d = decide(&m, &s, &r, &policy, T0 + 5000);
     assert!(d.terminate.is_empty());
     assert_eq!(d.pending[0].seen_scans, 1);
+    assert_eq!(
+        d.pending[0].wait,
+        PendingWait::IdleConfirming,
+        "새 ProcRef는 '안 씀' 관찰도 새로 시작"
+    );
 }
 
 #[test]
 fn self_and_ancestor_and_zombie_are_prefiltered() {
-    let mut sc = Scene::new();
+    let mut sc = Scene::unstable();
     let shell = proc_(300, 1, UID, OLD, "zsh");
     sc.procs.push(shell.clone());
     sc.procs[0].ppid = 300;
@@ -507,6 +507,7 @@ fn self_and_ancestor_and_zombie_are_prefiltered() {
         term(false),
         0,
     ));
+    sc.findings[0].section = Section::Unneeded;
     let z = sc.leftover(301, Kind::McpServer, Confidence::Confirmed, OLD, None);
     sc.procs.iter_mut().find(|p| p.pid == 301).unwrap().status = ProcStatus::Zombie;
     let (_, ds) = run_scans(&sc, &safe(), 2);
@@ -527,7 +528,7 @@ fn self_and_ancestor_and_zombie_are_prefiltered() {
 
 #[test]
 fn non_terminate_suggestions_are_never_candidates() {
-    let mut sc = Scene::new();
+    let mut sc = Scene::unstable();
     let r = sc.plain(101, Kind::AgentHelper, OLD);
     for sugg in [
         Suggestion::HandoffThenRestart,
@@ -537,7 +538,7 @@ fn non_terminate_suggestions_are_never_candidates() {
         Suggestion::None,
         Suggestion::RestartParent { parent: r },
     ] {
-        let mut s2 = Scene::new();
+        let mut s2 = Scene::unstable();
         s2.plain(101, Kind::AgentHelper, OLD);
         s2.findings.push(finding(
             "f",
@@ -557,11 +558,12 @@ fn non_terminate_suggestions_are_never_candidates() {
 
 #[test]
 fn pressure_sets_scan_interval() {
-    let sc = Scene::new();
     let m = mem(AutoLevel::Safe);
+    let sc = Scene::unstable();
     let (s, r) = sc.build_pressure(T0, 2);
     assert_eq!(decide(&m, &s, &r, &safe(), T0).next_scan_interval_ms, 2000);
-    let (s, r) = sc.build_pressure(T0, 1);
+    let calm = Scene::new();
+    let (s, r) = calm.build_pressure(T0, 1);
     assert_eq!(decide(&m, &s, &r, &safe(), T0).next_scan_interval_ms, 5000);
 }
 
@@ -570,9 +572,8 @@ fn assert_same_but_skipped(full: &vh_guard::Decisions, lean: &vh_guard::Decision
     assert_eq!(full.demote, lean.demote);
     assert_eq!(full.trip_circuit, lean.trip_circuit);
     assert_eq!(full.pending, lean.pending);
-    assert_eq!(full.notify, lean.notify);
     assert_eq!(full.next_term_streak, lean.next_term_streak);
-    assert_eq!(full.next_cpu_streak, lean.next_cpu_streak);
+    assert_eq!(full.stability, lean.stability);
     assert_eq!(full.next_scan_interval_ms, lean.next_scan_interval_ms);
     assert!(lean.skipped.is_empty());
 }
@@ -580,7 +581,7 @@ fn assert_same_but_skipped(full: &vh_guard::Decisions, lean: &vh_guard::Decision
 #[test]
 fn decide_lean_matches_decide_without_skips() {
     let mut scenes = Vec::new();
-    let mut a = Scene::new();
+    let mut a = Scene::unstable();
     a.leftover(
         101,
         Kind::McpServer,
@@ -599,7 +600,7 @@ fn decide_lean_matches_decide_without_skips() {
     a.leftover(104, Kind::McpServer, Confidence::Possible, OLD, Some(false));
     a.leftover(105, Kind::McpServer, Confidence::Confirmed, OLD, Some(true));
     scenes.push(a);
-    let mut q = Scene::new();
+    let mut q = Scene::unstable();
     for pid in 101..=106 {
         q.leftover(
             pid,
@@ -615,7 +616,7 @@ fn decide_lean_matches_decide_without_skips() {
     let mut skipped_seen = 0;
     for (si, sc) in scenes.iter().enumerate() {
         for policy in [safe(), aggressive(), notify_only()] {
-            let mut m = mem(policy.level);
+            let mut m = observed_idle_mem(sc, &policy, T0);
             for i in 0..4u64 {
                 let now = T0 + i * 5000;
                 let (mut s, r) = sc.build(now);
@@ -640,12 +641,14 @@ fn decide_lean_matches_decide_without_skips() {
 const NINE_MIN_AGO: u64 = T0 - 9 * 60_000;
 
 fn young_orphan(kind: Kind, owner_alive: Option<bool>) -> (Scene, ProcRef) {
-    let mut sc = Scene::new();
+    let mut sc = Scene::unstable();
     let p = proc_(101, 1, UID, NINE_MIN_AGO, "p101");
     let r = pref(&p);
     sc.procs.push(p);
-    sc.classified
-        .push(classified(r, kind, &format!("{kind:?} 101"), owner_alive));
+    let mut c = classified(r, kind, &format!("{kind:?} 101"), owner_alive);
+    c.usage.state = UsageState::Active;
+    c.usage.reasons.push(UsageReason::Young);
+    sc.classified.push(c);
     let mut f = finding(
         "orphan:101",
         FindingKind::Orphan,
@@ -673,6 +676,7 @@ fn young_orphan_with_confirmed_grounds_is_pending_with_eta_but_not_executed() {
         assert_eq!(d.pending.len(), 1, "{:?}", d.pending);
         let p = &d.pending[0];
         assert_eq!((p.target, p.step), (r, Step::Term));
+        assert_eq!(p.wait, PendingWait::TooYoung);
         assert_eq!(p.finding_id, "orphan:101");
         assert_eq!((p.seen_scans, p.needed_scans), (0, 2));
         assert_eq!(p.eta_ms, Some(60_000), "10분 - 9분");
@@ -702,7 +706,7 @@ fn young_orphan_then_ten_minutes_follows_existing_flow() {
     apply(&mut m, &d0);
     assert_eq!(d0.pending[0].seen_scans, 0);
 
-    let mut grown = Scene::new();
+    let mut grown = Scene::unstable();
     let p = proc_(101, 1, UID, NINE_MIN_AGO, "p101");
     grown.procs.push(p);
     grown
@@ -716,17 +720,22 @@ fn young_orphan_then_ten_minutes_follows_existing_flow() {
         term(false),
         100 * 1024 * 1024,
     ));
+    grown.findings[0].section = Section::Unneeded;
     let t1 = NINE_MIN_AGO + 10 * 60_000;
     let (s, rep) = grown.build(t1);
+    vh_guard::observe(&mut m, &s, &rep, None, &policy, t1);
     let d1 = decide(&m, &s, &rep, &policy, t1);
     apply(&mut m, &d1);
     assert!(d1.terminate.is_empty());
     assert_eq!(
-        (d1.pending[0].seen_scans, d1.pending[0].needed_scans),
-        (1, 2)
+        (d1.pending[0].seen_scans, d1.pending[0].wait),
+        (1, PendingWait::IdleConfirming),
+        "10분이 지나 안 씀이 된 순간부터 2분 관찰"
     );
-    let (s, rep) = grown.build(t1 + 5000);
-    let d2 = decide(&m, &s, &rep, &policy, t1 + 5000);
+    let t2 = t1 + 120_000;
+    let (s, rep) = grown.build(t2);
+    vh_guard::observe(&mut m, &s, &rep, None, &policy, t2);
+    let d2 = decide(&m, &s, &rep, &policy, t2);
     assert_eq!(d2.terminate.len(), 1);
     assert_eq!(d2.terminate[0].target, r);
 }

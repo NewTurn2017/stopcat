@@ -24,7 +24,7 @@ fn backend(scene: &Scene) -> (FakeGuardBackend, Probe, FakeClock) {
 }
 
 fn demoted_scene() -> (Scene, ProcRef) {
-    let mut sc = Scene::new();
+    let mut sc = Scene::unstable();
     let r = sc.plain(201, Kind::DevServer, OLD);
     (sc, r)
 }
@@ -48,7 +48,7 @@ fn drive_to_demote(h: &GuardHandle, rx: &UpdateReceiver, clock: &FakeClock) -> G
 
 #[test]
 fn spawn_sends_first_update_immediately() {
-    let mut sc = Scene::new();
+    let mut sc = Scene::unstable();
     sc.leftover(
         101,
         Kind::McpServer,
@@ -70,7 +70,7 @@ fn spawn_sends_first_update_immediately() {
 
 #[test]
 fn scan_now_triggers_scan_and_commands_return_status_updates() {
-    let sc = Scene::new();
+    let sc = Scene::unstable();
     let (be, probe, clock) = backend(&sc);
     let mut policy = safe();
     policy.scan_interval_ms = 600_000;
@@ -162,7 +162,7 @@ fn scan_panic_becomes_scan_error_thread_survives_and_restores_on_shutdown() {
 
 #[test]
 fn spawn_with_env_lock_refuses_set_level() {
-    let sc = Scene::new();
+    let sc = Scene::unstable();
     let (be, _probe, _clock) = backend(&sc);
     let (h, rx) = GuardHandle::spawn_with(notify_only(), be, true);
     assert!(next(&rx).status.level_locked_by_env);
@@ -176,7 +176,7 @@ fn spawn_with_env_lock_refuses_set_level() {
 
 #[test]
 fn updates_not_received_are_merged_and_none_lost() {
-    let sc = Scene::new();
+    let sc = Scene::unstable();
     let (be, _probe, _clock) = backend(&sc);
     let mut policy = safe();
     policy.scan_interval_ms = 600_000;
@@ -204,7 +204,7 @@ fn updates_not_received_are_merged_and_none_lost() {
 
 #[test]
 fn run_plan_result_is_kept_when_merged_with_later_updates() {
-    let sc = Scene::new();
+    let sc = Scene::unstable();
     let (be, _probe, _clock) = backend(&sc);
     let mut policy = safe();
     policy.scan_interval_ms = 600_000;

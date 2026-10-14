@@ -51,8 +51,10 @@ fn first_scan_pid_reuse_and_missing_cpu_time_are_none() {
 #[test]
 fn interval_by_pressure() {
     let p = safe();
-    assert_eq!(next_scan_interval_ms(&p, 0), 5000);
-    assert_eq!(next_scan_interval_ms(&p, 1), 5000);
-    assert_eq!(next_scan_interval_ms(&p, 2), 2000);
-    assert_eq!(next_scan_interval_ms(&p, 4), 2000);
+    assert_eq!(next_scan_interval_ms(&p, false), 5000, "정상");
+    assert_eq!(
+        next_scan_interval_ms(&p, true),
+        2000,
+        "불안정(W4: 압력 2 이상만이 아님)"
+    );
 }

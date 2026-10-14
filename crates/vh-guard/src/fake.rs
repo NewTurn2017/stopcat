@@ -552,28 +552,23 @@ pub fn classified(
     }
 }
 
-/// 합성 분류의 사용 판정: 주인 생존이면 Active(owner_alive), 아니면 Idle(연결·CPU·디스크 없음).
+/// 합성 분류의 사용 판정: 연결·CPU·디스크 없음(Idle). vh-analyze처럼 주인 생존은 Idle을 바꾸지 않고
+/// 근거(`owner_alive`)와 주인 상태로만 남는다(구역은 working·check가 되는 쪽).
 pub fn fixture_usage(owner_alive: Option<bool>) -> Usage {
-    if owner_alive == Some(true) {
-        return Usage {
-            state: UsageState::Active,
-            owner: OwnerState::Alive,
-            reasons: vec![UsageReason::OwnerAlive],
-            ..Usage::default()
-        };
-    }
+    let (owner, mut reasons) = match owner_alive {
+        Some(true) => (OwnerState::Alive, vec![UsageReason::OwnerAlive]),
+        Some(false) => (OwnerState::Ended, Vec::new()),
+        None => (OwnerState::Unknown, Vec::new()),
+    };
+    reasons.extend([
+        UsageReason::NoPeers,
+        UsageReason::CpuIdle,
+        UsageReason::DiskIdle,
+    ]);
     Usage {
         state: UsageState::Idle,
-        owner: if owner_alive == Some(false) {
-            OwnerState::Ended
-        } else {
-            OwnerState::Unknown
-        },
-        reasons: vec![
-            UsageReason::NoPeers,
-            UsageReason::CpuIdle,
-            UsageReason::DiskIdle,
-        ],
+        owner,
+        reasons,
         ..Usage::default()
     }
 }

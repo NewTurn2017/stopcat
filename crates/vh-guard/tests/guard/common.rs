@@ -2,7 +2,7 @@
 
 use vh_act::{PlanOrigin, Policy, PriorityTarget};
 use vh_guard::fake::*;
-use vh_guard::{AutoLevel, GuardEvent, GuardEventKind, GuardPolicy, GuardUpdate};
+use vh_guard::{AutoLevel, GuardEvent, GuardEventKind, GuardMemory, GuardPolicy, GuardUpdate};
 use vh_model::*;
 
 pub const SELF_PID: i32 = 4_000_000;
@@ -35,14 +35,26 @@ pub struct Scene {
     pub procs: Vec<Proc>,
     pub classified: Vec<Classified>,
     pub findings: Vec<Finding>,
+    /// 리포트의 건강 수준(W4: Ok면 자동 조치 0).
+    pub health: HealthLevel,
 }
 
 impl Scene {
+    /// 건강 정상(평소) 장면.
     pub fn new() -> Self {
         Scene {
             procs: vec![proc_(SELF_PID, 1, UID, OLD, "vh")],
             classified: Vec::new(),
             findings: Vec::new(),
+            health: HealthLevel::Ok,
+        }
+    }
+
+    /// 건강 주의(불안정) 장면. W4 이전 자동 조치 테스트는 이 장면에서 같은 흐름을 확인한다.
+    pub fn unstable() -> Self {
+        Scene {
+            health: HealthLevel::Watch,
+            ..Scene::new()
         }
     }
 
@@ -68,6 +80,9 @@ impl Scene {
             term(false),
             100 * 1024 * 1024,
         ));
+        if let Some(f) = self.findings.last_mut() {
+            f.section = Section::Unneeded;
+        }
         r
     }
 
@@ -82,10 +97,9 @@ impl Scene {
     }
 
     pub fn build(&self, now: u64) -> (Snapshot, Report) {
-        (
-            snapshot(SELF_PID, UID, now, self.procs.clone()),
-            report(now, self.classified.clone(), self.findings.clone()),
-        )
+        let mut r = report(now, self.classified.clone(), self.findings.clone());
+        r.health.level = self.health;
+        (snapshot(SELF_PID, UID, now, self.procs.clone()), r)
     }
 
     pub fn build_pressure(&self, now: u64, pressure: u32) -> (Snapshot, Report) {
@@ -124,4 +138,14 @@ pub fn demote_plan(u: &GuardUpdate, targets: &[ProcRef]) -> ActionPlan {
         ..Policy::default()
     };
     vh_act::plan_priority(&u.snapshot, Some(&u.report), &pt, &policy)
+}
+
+/// `idle_confirm_ms`(2분)보다 오래 전부터 '안 씀'을 본 것처럼 기억을 채운다(판정 테스트용).
+pub fn observed_idle_mem(scene: &Scene, policy: &GuardPolicy, now: u64) -> GuardMemory {
+    let mut m = GuardMemory::new(policy.level);
+    let then = now - policy.idle_confirm_ms - 1_000;
+    let (s, r) = scene.build(then);
+    vh_guard::observe(&mut m, &s, &r, None, policy, then);
+    m.swap_samples.clear();
+    m
 }
