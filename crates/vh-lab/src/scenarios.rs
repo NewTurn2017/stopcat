@@ -22,7 +22,8 @@ use crate::verdict_w4::{self as w4};
 use crate::vhjson::{self, JsonProbe};
 
 pub const A_END_MS: u64 = 13 * 60_000;
-pub const B_END_MS: u64 = 11 * 60_000 + 30_000;
+/// S12 자격 ≈ T+12:00(young 10분 + idle_confirm 120초) 뒤 2분을 더 본다(PM 판정표 보정 2: 13분 30초 이상).
+pub const B_END_MS: u64 = 14 * 60_000;
 pub const C_END_MS: u64 = 3 * 60_000;
 pub const S11_DELAY_MS: u64 = 60_000;
 pub const PROBES_MS: [u64; 4] = [120_000, 540_000, 660_000, 750_000];

@@ -182,11 +182,30 @@ impl Screen {
             self.line_feed();
         }
         let (r, x) = (self.row, self.col);
+        for p in x..(x + w).min(self.cols) {
+            self.break_wide_pair(r, p);
+        }
         self.cells[r][x] = Cell::Ch(c);
         if w == 2 && x + 1 < self.cols {
             self.cells[r][x + 1] = Cell::Cont;
         }
         self.col = (x + w).min(self.cols);
+    }
+
+    /// 칸 `p`를 덮기 전에, 그 칸이 넓은 글자의 한쪽 반이면 짝 칸을 비운다(진짜 터미널과 같은 동작).
+    /// 비우지 않으면 남은 Cont가 `text()`에서 빠져 공백이 사라진다.
+    fn break_wide_pair(&mut self, r: usize, p: usize) {
+        match self.cells[r][p] {
+            Cell::Cont if p > 0 => self.cells[r][p - 1] = Cell::Blank,
+            Cell::Ch(old)
+                if display_width(&old.to_string()) == 2
+                    && p + 1 < self.cols
+                    && self.cells[r][p + 1] == Cell::Cont =>
+            {
+                self.cells[r][p + 1] = Cell::Blank;
+            }
+            _ => {}
+        }
     }
 
     fn nums(&self) -> Vec<usize> {
@@ -317,5 +336,62 @@ mod tests {
         s.resize(80, 24);
         s.feed(b"\x1b[24;79Hxyz");
         assert!(s.text().ends_with("z"));
+    }
+
+    /// ratatui 버퍼 칸: 넓은 글자는 [글자, " "](뒤 반은 공백 칸으로 둔다).
+    fn cells_of(s: &str) -> Vec<(String, bool)> {
+        let mut v = Vec::new();
+        for c in s.chars() {
+            v.push((c.to_string(), false));
+            if display_width(&c.to_string()) == 2 {
+                v.push((" ".to_string(), true));
+            }
+        }
+        v
+    }
+
+    /// ratatui 차분 그리기: 앞 화면과 다른 칸만, 넓은 글자의 뒤 반은 건너뛰고 커서 이동과 함께 쓴다.
+    fn ratatui_diff(row: u16, old: &str, new: &str) -> Vec<u8> {
+        let (o, n) = (cells_of(old), cells_of(new));
+        let blank = (" ".to_string(), false);
+        let mut out = Vec::new();
+        for i in 0..o.len().max(n.len()) {
+            let nc = n.get(i).unwrap_or(&blank);
+            let oc = o.get(i).unwrap_or(&blank);
+            if nc.1 || nc.0 == oc.0 {
+                continue;
+            }
+            out.extend_from_slice(format!("\x1b[{};{}H", row + 1, i + 1).as_bytes());
+            out.extend_from_slice(nc.0.as_bytes());
+        }
+        out
+    }
+
+    #[test]
+    fn narrow_over_wide_half_leaves_space() {
+        let mut s = Screen::new(20, 2);
+        s.feed("가나다".as_bytes());
+        s.feed(b"\x1b[1;1Ha\x1b[1;3Hb");
+        assert_eq!(s.text().lines().next(), Some("a b 다"));
+        s.feed("\x1b[2;1Hxy\x1b[2;2H가".as_bytes());
+        assert_eq!(s.text().lines().nth(1), Some("x가"));
+        s.feed("\x1b[2;1H나\x1b[2;2H다".as_bytes());
+        assert_eq!(s.text().lines().nth(1), Some(" 다"));
+        s.feed("\x1b[2;3H라".as_bytes());
+        assert_eq!(s.text().lines().nth(1), Some("  라"));
+    }
+
+    #[test]
+    fn h1_guard_line_diff_redraw_keeps_spaces() {
+        let old =
+            "─ 지킴이 보고만(VH_GUARD_LEVEL 고정) · 켜짐 · 첫 확인 중 · VH_E2E_ALLOW_PIDS 잠금 ─";
+        let new = "─ 지킴이 보고만(VH_GUARD_LEVEL 고정) · 불안정 — 보고만(자동 정리 안 함) · 자동 종료 0/5(10분) ─";
+        assert!(display_width(old) <= 100 && display_width(new) <= 100);
+        let mut s = Screen::new(100, 30);
+        s.feed(&ratatui_like(28, 0, old));
+        s.feed(&ratatui_diff(28, old, new));
+        let row = s.text().lines().nth(28).unwrap_or_default().to_string();
+        assert_eq!(row, new);
+        assert!(s.contains("불안정 — 보고만(자동 정리 안 함)"));
     }
 }
