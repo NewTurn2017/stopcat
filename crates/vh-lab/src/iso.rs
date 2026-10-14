@@ -1,4 +1,4 @@
-//! 격리 실증(≤ 3분): 미끼 1 + 범위 안 고아 1 + 범위 안 폭주 1, Safe 지킴이(두 겹), 감독 SIGKILL 시험.
+//! 격리 실증(≤ 3분): 미끼 1 + 범위 안 고아 1 + 범위 안 CPU 많이 쓰는 것 1, Safe 지킴이(두 겹), 감독 SIGKILL 시험.
 
 use std::collections::BTreeSet;
 use std::io::{self, BufRead, BufReader};

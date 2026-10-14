@@ -189,14 +189,15 @@ fn circuit_pass_and_spread_inconclusive() {
                 GuardEventKind::CircuitOpen,
                 None,
                 T0,
-                "자동 종료 후보 7개가 한꺼번에 나와",
+                "자동 정리 후보가 한꺼번에 많이 나와(10분에 5개 제한) 자동 정리를 멈췄어요",
             )],
         )],
         kernel: ts.iter().map(|t| krec(*t, T0 + 1, true)).collect(),
         notes: vec![NotifyRec {
             at_ms: T0,
             title: "t".into(),
-            body: "자동 종료를 멈췄어요".into(),
+            body: "자동 정리 후보가 한꺼번에 많이 나와(10분에 5개 제한) 자동 정리를 멈췄어요"
+                .into(),
         }],
         ..Default::default()
     };

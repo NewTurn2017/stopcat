@@ -17,8 +17,8 @@ pub const STATE_NORMAL: &str = "평소 보고만";
 pub const UNSTABLE_NOTE: &str = "맥이 불안정해요";
 /// GUARD 강제 불안정 알림 앞 표지.
 pub const FORCED_NOTE_PREFIX: &str = "[시험]";
-/// GUARD 차단기 알림(W3와 같음).
-pub const CIRCUIT_NOTE: &str = "자동 종료를 멈췄어요";
+/// GUARD 차단기 알림(W4 문구, vh-guard engine.rs 차단기 detail의 끝).
+pub const CIRCUIT_NOTE: &str = "자동 정리를 멈췄어요";
 
 pub fn table() -> Value {
     json!({

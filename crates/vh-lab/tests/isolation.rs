@@ -148,7 +148,7 @@ fn t_iso_1_control_reaches_foreign_scoped_does_not() {
     );
     assert!(
         probe.log.demoted().is_empty(),
-        "W4: 실험실 폭주도 자동으로 낮추지 않음"
+        "W4: 실험실의 CPU 많이 쓰는 것도 자동으로 낮추지 않음"
     );
     assert!(shutdown.undemoted.is_empty());
     let calls = calls.lock().unwrap();

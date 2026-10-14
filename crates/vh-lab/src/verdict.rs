@@ -563,7 +563,11 @@ pub fn never_touched(
     it
 }
 
+/// 차단기 detail에 들어 있는 할당량 표기(W4 문구에는 후보 수가 없다).
+pub const CIRCUIT_QUOTA_KO: &str = "10분에 5개 제한";
+
 /// S12: 한꺼번에 7개 → 그 스캔 0건 실행 + 차단기 + 알림.
+/// '7개 동시 자격'은 문구가 아니라 all_alive·zero_auto_terminated·circuit_open_once를 함께 보아 판정한다.
 pub fn circuit(r: &Records, targets: &[ProcRef]) -> Item {
     let auto = r.events_kind(GuardEventKind::AutoTerminated).len();
     let opens = r.events_kind(GuardEventKind::CircuitOpen);
@@ -573,8 +577,8 @@ pub fn circuit(r: &Records, targets: &[ProcRef]) -> Item {
         ("zero_term_signals", sends == 0),
         ("circuit_open_once", opens.len() == 1),
         (
-            "circuit_detail_7",
-            opens.iter().any(|e| e.detail_ko.contains("7개")),
+            "circuit_detail_quota",
+            opens.iter().any(|e| e.detail_ko.contains(CIRCUIT_QUOTA_KO)),
         ),
         (
             "status_circuit_open",
@@ -582,7 +586,7 @@ pub fn circuit(r: &Records, targets: &[ProcRef]) -> Item {
         ),
         (
             "notification_recorded",
-            r.notes_with("자동 종료를 멈췄어요") >= 1,
+            r.notes_with(crate::strings::CIRCUIT_NOTE) >= 1,
         ),
         ("all_alive", targets.iter().all(|t| r.alive_at_end(*t))),
     ]);
