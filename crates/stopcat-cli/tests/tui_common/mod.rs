@@ -167,3 +167,116 @@ pub fn check_widths(lines: &[String], w: usize) {
 pub fn has(lines: &[String], needle: &str) -> bool {
     lines.iter().any(|l| l.contains(needle))
 }
+
+/// 색까지 담은 버퍼(미리보기용).
+pub fn render_buffer(m: &mut Model, w: u16, h: u16) -> ratatui::buffer::Buffer {
+    m.set_size(w, h);
+    let mut t = Terminal::new(TestBackend::new(w, h)).expect("terminal");
+    t.draw(|f| view::draw(f, m)).expect("draw");
+    t.backend().buffer().clone()
+}
+
+/// 버퍼 → HTML 격자(칸마다 고정 폭 상자, 넓은 글자는 2칸). 글꼴 폭에 기대지 않고 정렬을 그대로 보인다.
+/// `light`면 밝은 배경 터미널을 흉내 낸다.
+pub fn buffer_html(buf: &ratatui::buffer::Buffer, title: &str, light: bool) -> String {
+    use ratatui::style::{Color, Modifier};
+    let (dfg, dbg) = if light {
+        ("#1f2328", "#ffffff")
+    } else {
+        ("#d8dee9", "#14161c")
+    };
+    let hex = |c: Color, d: &str| -> String {
+        match c {
+            Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+            Color::Reset => d.to_string(),
+            Color::Indexed(i) => format!("var(--c{i})"),
+            Color::Black => "#000".into(),
+            Color::White => "#fff".into(),
+            other => format!("{other:?}").to_lowercase(),
+        }
+    };
+    let a = buf.area;
+    let mut rows = String::new();
+    for y in a.y..a.y + a.height {
+        rows.push_str("<div class=r>");
+        let mut x = a.x;
+        while x < a.x + a.width {
+            let c = &buf[(x, y)];
+            let sym = c.symbol();
+            let w = fmt::width(sym).max(1) as u16;
+            let (mut fg, mut bg) = (hex(c.fg, dfg), hex(c.bg, dbg));
+            if c.modifier.contains(Modifier::REVERSED) {
+                std::mem::swap(&mut fg, &mut bg);
+            }
+            let mut st = format!("color:{fg};background:{bg};width:{}px;", 9 * w);
+            if c.modifier.contains(Modifier::BOLD) {
+                st.push_str("font-weight:700;");
+            }
+            if c.modifier.contains(Modifier::DIM) {
+                st.push_str("opacity:.55;");
+            }
+            if c.modifier.contains(Modifier::ITALIC) {
+                st.push_str("font-style:italic;");
+            }
+            if c.modifier.contains(Modifier::UNDERLINED) {
+                st.push_str("text-decoration:underline;");
+            }
+            let s = match sym {
+                "<" => "&lt;",
+                ">" => "&gt;",
+                "&" => "&amp;",
+                " " => "&nbsp;",
+                o => o,
+            };
+            rows.push_str(&format!("<span style=\"{st}\">{s}</span>"));
+            x += w;
+        }
+        rows.push_str("</div>\n");
+    }
+    format!(
+        "<!doctype html><meta charset=utf-8><title>{title}</title><style>\
+body{{margin:0;padding:16px;background:{dbg};font:15px/19px 'SF Mono',Menlo,'Apple SD Gothic Neo',monospace}}\
+.r{{display:flex;height:19px;white-space:pre}}.r span{{display:inline-block;text-align:center;overflow:visible;flex:none}}\
+h1{{font:12px sans-serif;color:#888;margin:0 0 8px}}</style><h1>{title}</h1>\n{rows}"
+    )
+}
+
+/// 버퍼 → ANSI 글(트루컬러 SGR). 실제 터미널 에뮬레이터로 다시 그려 볼 때 쓴다.
+pub fn buffer_ansi(buf: &ratatui::buffer::Buffer) -> String {
+    use ratatui::style::{Color, Modifier};
+    let sgr = |c: Color, fg: bool| -> String {
+        let base = if fg { 38 } else { 48 };
+        match c {
+            Color::Rgb(r, g, b) => format!("{base};2;{r};{g};{b}"),
+            Color::Indexed(i) => format!("{base};5;{i}"),
+            _ => (if fg { "39" } else { "49" }).to_string(),
+        }
+    };
+    let a = buf.area;
+    let mut out = String::new();
+    for y in a.y..a.y + a.height {
+        let mut x = a.x;
+        while x < a.x + a.width {
+            let c = &buf[(x, y)];
+            let mut codes = vec!["0".to_string(), sgr(c.fg, true), sgr(c.bg, false)];
+            for (m, n) in [
+                (Modifier::BOLD, "1"),
+                (Modifier::DIM, "2"),
+                (Modifier::ITALIC, "3"),
+                (Modifier::UNDERLINED, "4"),
+                (Modifier::REVERSED, "7"),
+            ] {
+                if c.modifier.contains(m) {
+                    codes.push(n.to_string());
+                }
+            }
+            out.push_str(&format!("\x1b[{}m{}", codes.join(";"), c.symbol()));
+            x += fmt::width(c.symbol()).max(1) as u16;
+        }
+        out.push_str("\x1b[0m");
+        if y + 1 < a.y + a.height {
+            out.push_str("\r\n");
+        }
+    }
+    out
+}

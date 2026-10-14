@@ -8,10 +8,10 @@ use std::sync::Arc;
 
 use common::*;
 use crossterm::event::KeyCode;
-use tui_common::*;
 use stopcat_cli::tui::link::Update;
 use stopcat_cli::tui::state::{Dialog, Model, build_ports, build_rows, target_infos};
 use stopcat_model::*;
+use tui_common::*;
 
 fn resend(m: &Model) -> Update {
     let l = m.latest.clone().expect("latest");
@@ -97,7 +97,7 @@ fn age_advances_without_rebuild() {
     assert!(
         has(
             &l,
-            "> [ ] codex app-server      1.0GB  4일    주인 끝남·CPU 0·연결 0  자동 예정 1/2"
+            "❯ ○ codex app-server      1.0GB  4일    주인 끝남·CPU 0·연결 0  ◑ 자동 예정 1/2"
         ),
         "{l:#?}"
     );

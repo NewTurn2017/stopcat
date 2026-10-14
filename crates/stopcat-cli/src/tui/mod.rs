@@ -5,6 +5,7 @@ pub mod link;
 mod real;
 pub mod state;
 pub mod term;
+pub mod theme;
 pub mod view;
 
 use std::io;

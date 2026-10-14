@@ -9,10 +9,11 @@ use stopcat_act::{PlanOrigin, Policy, PriorityTarget, Selection};
 use stopcat_model::{
     ActionPlan, AutoLevel, Classified, Confidence, Finding, FindingKind, GuardEvent,
     GuardEventKind, GuardPolicy, GuardStatus, Kind, ProcRef, Report, Section, Snapshot, Step,
-    Suggestion, StopcatConfig,
+    StopcatConfig, Suggestion,
 };
 
 use super::link::{Cmd, ManualResult, Update};
+use super::theme::{ColorMode, Theme};
 use crate::fmt;
 use crate::render::section::{self as sec, UsageView};
 
@@ -308,6 +309,8 @@ pub struct Model {
     pub env_warning: Option<String>,
     pub e2e_lock: bool,
     pub no_color: bool,
+    /// 색이 켜졌을 때의 단계(`no_color`가 우선). 실제 값은 `real.rs`가 `COLORTERM`으로 정한다.
+    pub color_mode: ColorMode,
     pub guard_dead: Option<String>,
     pub width: u16,
     pub height: u16,
@@ -399,6 +402,7 @@ impl Model {
             env_warning,
             e2e_lock,
             no_color: false,
+            color_mode: ColorMode::TrueColor,
             guard_dead: None,
             width: MIN_WIDTH,
             height: MIN_HEIGHT,
@@ -420,6 +424,15 @@ impl Model {
             level: self.effective_level(),
             interval_ms: self.config.scan_interval_ms,
         }
+    }
+
+    /// 그릴 때 쓰는 색 테마.
+    pub fn theme(&self) -> Theme {
+        Theme::new(if self.no_color {
+            ColorMode::None
+        } else {
+            self.color_mode
+        })
     }
 
     pub fn too_small(&self) -> bool {
@@ -946,7 +959,7 @@ impl Model {
                         level_ko(l)
                     ),
                     "화면에서는 바꿀 수 없어요.".to_string(),
-                    "바꾸려면 STOPCAT_GUARD_LEVEL 없이 stopcat 를 실행하세요.".to_string(),
+                    "바꾸려면 STOPCAT_GUARD_LEVEL 없이 stopcat을 실행하세요.".to_string(),
                     String::new(),
                     "아무 키나 누르면 닫혀요".to_string(),
                 ],

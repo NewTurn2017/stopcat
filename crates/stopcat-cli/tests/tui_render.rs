@@ -6,11 +6,11 @@ mod tui_common;
 
 use common::*;
 use crossterm::event::KeyCode;
-use tui_common::*;
 use stopcat_cli::fmt;
 use stopcat_cli::tui::state::{Dialog, Model, Tab};
 use stopcat_cli::tui::view::{self, FIRST_RUN_LINES, KEYS_FIRST_RUN, TOO_SMALL};
 use stopcat_model::*;
+use tui_common::*;
 
 const SIZES: [(u16, u16); 2] = [(80, 24), (120, 40)];
 
@@ -56,7 +56,7 @@ fn cursor_to_pid(m: &mut Model, pid: i32) {
 fn list_block(l: &[String]) -> Vec<String> {
     let i = l
         .iter()
-        .position(|x| x.starts_with("      대상"))
+        .position(|x| x.starts_with("    대상"))
         .expect("열 머리");
     l[i..i + 13].to_vec()
 }
@@ -102,18 +102,18 @@ fn list_names_have_no_size_or_age() {
 
 /// 평소 보고 화면 목록(열 머리 + 구역 머리 4 + 행 7 + 아래 표시), 80칸.
 const LIST_80: [&str; 13] = [
-    "      대상                   크기  나이   근거                    지킴이",
-    "필요 없음 3 · 정리하면 약 1.5GB · c 로 전부 정리",
-    "> [ ] codex app-server      1.0GB  3일    주인 끝남·CPU 0·연결 0  불안정 시 자동",
-    "  [ ] headless Chrome (Ch…  380MB  7시간  주인 끝남·CPU 0·연결 0  정리 추천",
-    "  [ ] npm exec               84MB  3일    주인 끝남·CPU 0·연결 0  정리 추천",
-    "확인 필요 3 · 쓰고 있는지 확실하지 않아 보고만 · 확인하면 약 8.0GB",
-    "  [ ] Android 에뮬레이터 …  7.5GB  3일    주인 끝남·CPU 3%·연결 6 확인 필요",
-    "  [ ] appium (앱 테스트) …  412MB  2일    주인 있음·안 쓰는 듯    확인 필요",
-    "  [ ] 테스트 서버 (node) …   96MB  1일    주인 끝남·CPU 0·연결 …  확인 필요",
-    "일하는 중 1 · 건드리지 않음",
-    "  [ ] Next.js 개발 서버            2시간  주인 있음·CPU 103%      건드리지 않음",
-    "직접 하면 확보 2 · 약 22GB · 방법은 w",
+    "    대상                   크기  나이   근거                    지킴이",
+    " 필요 없음 3   정리하면 약 1.5GB · c 로 전부 정리",
+    "❯ ○ codex app-server      1.0GB  3일    주인 끝남·CPU 0·연결 0  ◷ 불안정 시 자동",
+    "  ○ headless Chrome (Ch…  380MB  7시간  주인 끝남·CPU 0·연결 0  ◆ 정리 추천",
+    "  ○ npm exec               84MB  3일    주인 끝남·CPU 0·연결 0  ◆ 정리 추천",
+    " 확인 필요 3   쓰고 있는지 확실하지 않아 보고만 · 확인하면 약 8.0GB",
+    "  ○ Android 에뮬레이터 …  7.5GB  3일    주인 끝남·CPU 3%·연결 6 ▲ 확인 필요",
+    "  ○ appium (앱 테스트) …  412MB  2일    주인 있음·안 쓰는 듯    ▲ 확인 필요",
+    "  ○ 테스트 서버 (node) …   96MB  1일    주인 끝남·CPU 0·연결 …  ▲ 확인 필요",
+    " 일하는 중 1   건드리지 않음",
+    "  ○ Next.js 개발 서버            2시간  주인 있음·CPU 103%      ● 건드리지 않음",
+    " 직접 하면 확보 2   약 22GB · 방법은 w",
     "  ↓ 2줄 더 있어요(↓ 로 내려 보기)",
 ];
 
@@ -122,14 +122,21 @@ fn report_tab_normal() {
     let mut m = calm_model();
     for l in both(&mut m) {
         let h = l.len();
-        assert!(l[0].starts_with("stopcat  메모리 정상 — 압력 1"), "{}", l[0]);
-        assert_eq!(
-            l[1],
-            "         확보 가능 1.5GB · 확인하면 +8.0GB · 직접 하면 +22GB"
-        );
-        assert!(l[2].starts_with("[1 보고 9]"), "{}", l[2]);
+        assert!(l[0].starts_with(view::LOGO[0]), "{}", l[0]);
         assert!(
-            l[h - 2].starts_with("─ 지킴이 안정화 자동 · 평소 보고만 · 확인 "),
+            l[0].contains("● 메모리 정상 · 압력 1 · 압축 41GB"),
+            "{}",
+            l[0]
+        );
+        assert!(
+            l[1].ends_with("확보 가능 1.5GB · 확인하면 +8.0GB · 직접 하면 +22GB"),
+            "{}",
+            l[1]
+        );
+        assert!(l[2].starts_with(" 1 보고 9 "), "{}", l[2]);
+        assert!(l[2].ends_with(view::CREDIT), "{}", l[2]);
+        assert!(
+            l[h - 2].starts_with(" 지킴이 안정화 자동  평소 보고만   확인 "),
             "{}",
             l[h - 2]
         );
@@ -139,22 +146,22 @@ fn report_tab_normal() {
         );
         assert_eq!(l[h - 1], view::KEYS_FINDINGS);
         let order = [
-            "필요 없음 3 · 정리하면 약 1.5GB · c 로 전부 정리",
-            "확인 필요 3 · 쓰고 있는지 확실하지 않아 보고만 · 확인하면 약 8.0GB",
-            "일하는 중 1 · 건드리지 않음",
-            "직접 하면 확보 2 · 약 22GB · 방법은 w",
+            " 필요 없음 3   정리하면 약 1.5GB · c 로 전부 정리",
+            " 확인 필요 3   쓰고 있는지 확실하지 않아 보고만 · 확인하면 약 8.0GB",
+            " 일하는 중 1   건드리지 않음",
+            " 직접 하면 확보 2   약 22GB · 방법은 w",
         ];
         let pos: Vec<usize> = order
             .iter()
             .map(|t| l.iter().position(|x| x == t).expect(t))
             .collect();
         assert!(pos.windows(2).all(|w| w[0] < w[1]), "구역 순서: {pos:?}");
-        assert!(has(&l, "근거    주인 끝남 · CPU 0% · 연결 0"));
+        assert!(has(&l, "│ 근거    주인 끝남 · CPU 0% · 연결 0"));
     }
     assert_eq!(list_block(&render(&mut m, 80, 24)), LIST_80);
     let l = render(&mut m, 120, 40);
-    assert!(has(&l, "omo 세션(bun)") && has(&l, "핸드오프 저장 후 재시작 직접 하면 확보"));
-    assert!(has(&l, "aside 좀비 20개") && has(&l, "앱 재시작 필요"));
+    assert!(has(&l, "omo 세션(bun)") && has(&l, "핸드오프 저장 후 재시작 ◇ 직접 하면 확보"));
+    assert!(has(&l, "aside 좀비 20개") && has(&l, "↻ 앱 재시작 필요"));
     assert!(has(&l, "왜      띄운 Claude 세션이 이미 끝났어요"));
 }
 
@@ -163,14 +170,14 @@ fn report_tab_unstable_pending_and_settling() {
     let mut m = unstable_model(|_| {});
     for l in both(&mut m) {
         let h = l.len();
-        assert!(l[0].starts_with("stopcat  메모리 주의"));
-        assert!(has(&l, "> [ ] codex app-server") && has(&l, "자동 예정 1/2"));
+        assert!(l[0].contains("● 메모리 주의 · 압력 2"), "{}", l[0]);
+        assert!(has(&l, "❯ ○ codex app-server") && has(&l, "◑ 자동 예정 1/2"));
         assert!(has(
             &l,
             "맥이 불안정해 2번 연속 확인되면 자동으로 정리해요(지금 1/2)."
         ));
         assert!(
-            l[h - 2].contains("지킴이 안정화 자동 · 불안정 — 자동 정리 중 · 자동 종료 0/5(10분)"),
+            l[h - 2].contains(" 지킴이 안정화 자동  불안정 — 자동 정리 중   자동 종료 0/5(10분)"),
             "{}",
             l[h - 2]
         );
@@ -184,7 +191,7 @@ fn report_tab_unstable_pending_and_settling() {
     }));
     let l = render(&mut n, 80, 24);
     assert!(
-        l[22].contains("지킴이 보고만 · 불안정 — 보고만(자동 정리 안 함)"),
+        l[22].contains(" 지킴이 보고만  불안정 — 보고만(자동 정리 안 함) "),
         "{}",
         l[22]
     );
@@ -202,8 +209,12 @@ fn report_tab_circuit_open() {
     });
     for l in both(&mut m) {
         let h = l.len();
-        assert!(has(&l, "차단기: 보고만"));
-        assert!(l[h - 2].contains("차단기 열림(보고만) · 자동 종료 5/5(10분)"));
+        assert!(has(&l, "⊘ 차단기: 보고만"));
+        assert!(
+            l[h - 2].contains(" 차단기 열림(보고만)   자동 종료 5/5(10분)"),
+            "{}",
+            l[h - 2]
+        );
         assert_eq!(l[h - 1], view::KEYS_FINDINGS_CIRCUIT);
     }
     assert_eq!(m.rows[0].mark.text(), "차단기: 보고만");
@@ -213,12 +224,12 @@ fn report_tab_circuit_open() {
 fn report_tab_scrolls_to_manual_rows() {
     let mut m = calm_model();
     let l = render(&mut m, 80, 24);
-    assert_eq!(l[16], view::more_below(2));
+    assert_eq!(l[15], view::more_below(2));
     cursor_to_pid(&mut m, 8101);
     let l = render(&mut m, 80, 24);
     check_widths(&l, 80);
-    assert_eq!(l[5], view::more_above(2));
-    assert!(l[16].starts_with(">     aside 좀비 20개"), "{}", l[16]);
+    assert_eq!(l[4], view::more_above(2));
+    assert!(l[15].starts_with("❯   aside 좀비 20개"), "{}", l[15]);
     assert!(has(&l, "방법    띄운 앱 다시 시작"));
     assert!(has(&l, "지킴이  이미 끝난 프로세스예요."));
 }
@@ -228,8 +239,9 @@ fn report_tab_all_empty() {
     let mut m = Model::new(Some(done_config(AutoLevel::Safe)), None, false);
     m.apply(update_from(report_empty(), AutoLevel::Safe, |_, _| {}));
     for l in both(&mut m) {
-        assert_eq!(l[1], "         지금 확보할 것이 없어요");
-        assert!(l[2].starts_with("[1 보고 0]"));
+        assert!(l[1].ends_with("지금 확보할 것이 없어요"), "{}", l[1]);
+        assert!(l[2].starts_with(" 1 보고 0 "), "{}", l[2]);
+        assert!(has(&l, view::EMPTY_CAT[1]));
         for t in view::EMPTY_BODY.iter().filter(|t| !t.is_empty()) {
             assert!(has(&l, t), "{t}");
         }
@@ -242,13 +254,17 @@ fn report_tab_unneeded_empty() {
     let mut m = Model::new(Some(done_config(AutoLevel::Safe)), None, false);
     m.apply(update_from(no_unneeded(), AutoLevel::Safe, |_, _| {}));
     for l in both(&mut m) {
-        assert_eq!(l[1], "         확보 가능 0 · 확인하면 +8.0GB · 직접 하면 +22GB");
+        assert!(
+            l[1].ends_with("확보 가능 0 · 확인하면 +8.0GB · 직접 하면 +22GB"),
+            "{}",
+            l[1]
+        );
         let i = l
             .iter()
-            .position(|x| x == "필요 없음 0")
+            .position(|x| x == " 필요 없음 0")
             .expect("필요 없음 머리");
         assert_eq!(l[i + 1], view::UNNEEDED_EMPTY_LINE);
-        assert!(l[i + 2].starts_with("확인 필요 3"));
+        assert!(l[i + 2].starts_with(" 확인 필요 3"));
     }
     m.on_key(ch('c'));
     assert!(m.dialog.is_none());
@@ -281,10 +297,16 @@ fn pointed_preview_warns_first_with_evidence() {
     let mut m = calm_model();
     cursor_to_pid(&mut m, 3000);
     m.on_key(ch(' '));
-    assert_eq!(m.flash.as_deref(), Some(stopcat_cli::tui::state::PICK_WORKING));
+    assert_eq!(
+        m.flash.as_deref(),
+        Some(stopcat_cli::tui::state::PICK_WORKING)
+    );
     cursor_to_pid(&mut m, 40112);
     m.on_key(ch(' '));
-    assert_eq!(m.flash.as_deref(), Some(stopcat_cli::tui::state::PICK_CHECK));
+    assert_eq!(
+        m.flash.as_deref(),
+        Some(stopcat_cli::tui::state::PICK_CHECK)
+    );
     m.on_key(key(KeyCode::Enter));
     let Some(Dialog::Preview { lines, .. }) = &m.dialog else {
         panic!("{:?}", m.dialog)
@@ -400,8 +422,8 @@ fn first_report_shows_notice_and_hides_definite_lines() {
     m.apply(first_scan_update(rep.clone()));
     assert!(view::first_report(&m));
     for l in both(&mut m) {
-        assert_eq!(l[1], view::RECLAIM_FIRST);
-        assert_eq!(l[4], view::FIRST_REPORT);
+        assert!(l[1].ends_with(view::RECLAIM_FIRST), "{}", l[1]);
+        assert_eq!(l[3], view::FIRST_REPORT);
         assert!(!has(&l, "필요 없음 0") && !has(&l, view::UNNEEDED_EMPTY_LINE));
         assert!(!has(&l, "확보 가능 0") && !has(&l, "맥 상태가 좋아요"));
         assert!(has(&l, "확인 필요 ") && has(&l, "주인 끝남·CPU 모름"));
@@ -415,13 +437,13 @@ fn first_report_shows_notice_and_hides_definite_lines() {
     let l = render(&mut m, 80, 24);
     assert!(!has(&l, view::FIRST_REPORT));
     assert!(has(&l, "필요 없음 0") && has(&l, view::UNNEEDED_EMPTY_LINE));
-    assert_eq!(l[1], "         확보 가능 0 · 확인하면 +8.0GB · 직접 하면 +22GB");
+    assert!(l[1].ends_with("확보 가능 0 · 확인하면 +8.0GB · 직접 하면 +22GB"));
 
     let mut e = Model::new(Some(done_config(AutoLevel::Safe)), None, false);
     e.apply(first_scan_update(report_empty()));
     for l in both(&mut e) {
-        assert_eq!(l[1], view::RECLAIM_FIRST);
-        assert_eq!(l[4], view::FIRST_REPORT);
+        assert!(l[1].ends_with(view::RECLAIM_FIRST), "{}", l[1]);
+        assert_eq!(l[3], view::FIRST_REPORT);
         assert!(!has(&l, "맥 상태가 좋아요") && !has(&l, "지금 확보할 것이 없어요"));
     }
 }
@@ -431,14 +453,22 @@ fn first_run_screen_exact() {
     let mut m = Model::new(None, None, false);
     let l = render(&mut m, 80, 24);
     check_widths(&l, 80);
-    let mut want = vec!["stopcat  처음 실행".to_string(), "─".repeat(80)];
-    want.extend(FIRST_RUN_LINES.iter().map(|s| s.trim_end().to_string()));
-    while want.len() < 22 {
-        want.push(String::new());
+    assert_eq!(l[1].trim(), view::LOGO[0].trim());
+    assert_eq!(l[2].trim(), view::LOGO[1].trim());
+    assert_eq!(l[3].trim(), view::TAGLINE);
+    assert!(
+        l[5].starts_with(&format!("╭─ {} ─", view::FIRST_RUN_TITLE)),
+        "{}",
+        l[5]
+    );
+    for (i, want) in FIRST_RUN_LINES.iter().enumerate() {
+        let got = &l[6 + i];
+        assert!(got.starts_with(&format!("│ {want}")), "{got}");
+        assert!(got.ends_with('│'), "{got}");
     }
-    want.push("─".repeat(80));
-    want.push(KEYS_FIRST_RUN.to_string());
-    assert_eq!(l, want);
+    assert!(l[6 + FIRST_RUN_LINES.len()].starts_with('╰'));
+    assert!(l[22].ends_with(view::CREDIT), "{}", l[22]);
+    assert_eq!(l[23], KEYS_FIRST_RUN);
     both(&mut m);
 
     let mut env = Model::new(None, Some("notify"), false);
@@ -511,7 +541,7 @@ fn log_tab_with_and_without_events() {
     m.apply(u);
     assert_eq!(m.tab, Tab::Log);
     for l in both(&mut m) {
-        assert!(l[2].contains("[3 자동 처리 기록 2]"), "{}", l[2]);
+        assert!(l[2].contains(" 3 자동 처리 기록 2 "), "{}", l[2]);
         assert!(has(&l, "이번에 자동으로 정리한 양 약 96MB · 자동 종료 1건"));
         assert!(has(&l, "자동 종료") && has(&l, "MCP 서버: chrome-devtools"));
         assert!(has(&l, "수준 바꿈"));
@@ -586,7 +616,7 @@ fn small_dialogs_help_level_aggressive_result_why() {
     m.on_key(ch('x'));
     m.on_key(ch('a'));
     let l = render(&mut m, 80, 24);
-    assert!(has(&l, "> 안정화 자동") && has(&l, "(지금)"));
+    assert!(has(&l, "❯ 안정화 자동") && has(&l, "(지금)"));
     assert!(has(&l, view::LEVEL_NOTE[0]) && has(&l, view::LEVEL_NOTE[1]));
     assert!(has(
         &l,
@@ -628,9 +658,9 @@ fn loading_before_first_update() {
     let mut m = Model::new(Some(done_config(AutoLevel::NotifyOnly)), None, false);
     let l = render(&mut m, 80, 24);
     check_widths(&l, 80);
-    assert_eq!(l[0], "stopcat  메모리 확인 중…");
+    assert!(l[0].ends_with("◌ 메모리 확인 중…"), "{}", l[0]);
     assert!(
-        l[22].contains("지킴이 보고만 · 켜짐 · 첫 확인 중"),
+        l[22].contains(" 지킴이 보고만  켜짐 · 첫 확인 중"),
         "{}",
         l[22]
     );
@@ -705,4 +735,98 @@ fn no_unneeded() -> Report {
     rep.findings.retain(|f| f.section != Section::Unneeded);
     rep.totals.unneeded_bytes = 0;
     rep
+}
+
+/// 색 화면 미리보기: `STOPCAT_SHOTS=<폴더> cargo test -p stopcat-cli --test tui_render -- --ignored write_html_screens`
+/// 로 HTML 격자를 만든다(디자인 확인·README 스크린샷용).
+#[test]
+#[ignore = "STOPCAT_SHOTS 폴더에 HTML을 쓴다"]
+fn write_html_screens() {
+    let Some(dir) = std::env::var_os("STOPCAT_SHOTS") else {
+        return;
+    };
+    let dir = std::path::PathBuf::from(dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let color = |mut m: Model| {
+        m.no_color = false;
+        m
+    };
+    let mut shots: Vec<(&str, Model, u16, u16)> = Vec::new();
+    shots.push(("first-run", Model::new(None, None, false), 80, 24));
+    shots.push(("report-80", color(calm_model()), 80, 24));
+    shots.push(("report-120", color(calm_model()), 120, 40));
+    shots.push(("report-100", color(calm_model()), 100, 30));
+    shots.push(("unstable-80", color(unstable_model(|_| {})), 80, 24));
+    let mut m = color(unstable_model(|st| {
+        st.circuit_open = true;
+        st.terminations_in_window = 5;
+    }));
+    m.on_key(ch('j'));
+    shots.push(("circuit-80", m, 80, 24));
+    let mut m = color(calm_model());
+    m.on_key(ch('c'));
+    shots.push(("bulk-preview", m, 100, 30));
+    let mut m = color(calm_model());
+    cursor_to_pid(&mut m, 3000);
+    m.on_key(ch(' '));
+    cursor_to_pid(&mut m, 40112);
+    m.on_key(ch(' '));
+    m.on_key(key(KeyCode::Enter));
+    shots.push(("warn-preview", m, 100, 30));
+    let mut m = color(calm_model());
+    m.on_key(ch('a'));
+    shots.push(("level", m, 100, 30));
+    let mut m = color(calm_model());
+    m.on_key(ch('?'));
+    shots.push(("help", m, 100, 30));
+    let mut m = color(calm_model());
+    m.on_key(ch('2'));
+    shots.push(("ports", m, 100, 30));
+    let mut m = color(calm_model());
+    m.on_key(ch('4'));
+    shots.push(("settings", m, 100, 30));
+    let mut m = color(main_model());
+    m.on_key(ch('w'));
+    shots.push(("why", m, 100, 30));
+    let mut m = Model::new(Some(done_config(AutoLevel::Safe)), None, false);
+    m.apply(update_from(report_empty(), AutoLevel::Safe, |_, _| {}));
+    shots.push(("empty", m, 100, 30));
+    shots.push(("small", color(calm_model()), 64, 18));
+    let mut m = Model::new(Some(done_config(AutoLevel::Safe)), None, false);
+    let mut u = normal_update();
+    let s = snapshot();
+    u.new_events = vec![
+        event(
+            GuardEventKind::LevelChanged,
+            "보고만 → 안정화 자동",
+            "사용자가 바꿈",
+            0,
+            None,
+        ),
+        event(
+            GuardEventKind::AutoTerminated,
+            "MCP 서버: chrome-devtools",
+            "띄운 Claude 세션이 12분 전에 끝났고 2번 연속 확인됐어요",
+            96 * MIB,
+            Some(r(40200, &s)),
+        ),
+    ];
+    m.apply(u);
+    m.on_key(ch('3'));
+    shots.push(("log", m, 100, 30));
+    let mut idx = String::from(
+        "<!doctype html><meta charset=utf-8><body style='background:#222;color:#ccc;font:14px sans-serif'>",
+    );
+    for (name, mut m, w, h) in shots {
+        let buf = render_buffer(&mut m, w, h);
+        std::fs::write(dir.join(format!("{name}-{w}x{h}.ans")), buffer_ansi(&buf)).unwrap();
+        for (suffix, light) in [("", false), ("-light", true)] {
+            let html = buffer_html(&buf, &format!("{name} {w}×{h}"), light);
+            std::fs::write(dir.join(format!("{name}{suffix}.html")), html).unwrap();
+        }
+        idx.push_str(&format!(
+            "<p><a href='{name}.html'>{name}</a> · <a href='{name}-light.html'>light</a></p>"
+        ));
+    }
+    std::fs::write(dir.join("index.html"), idx).unwrap();
 }

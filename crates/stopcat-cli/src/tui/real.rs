@@ -178,6 +178,8 @@ pub fn run(opts: TuiOpts) -> i32 {
         m.flash = eff.warning_ko.clone();
     }
     m.no_color = opts.no_color;
+    m.color_mode =
+        super::theme::ColorMode::detect(opts.no_color, std::env::var("COLORTERM").ok().as_deref());
     let home = std::env::var("HOME").unwrap_or_default();
     m.config_path = display_path(
         &stopcat_guard::config::config_path(&state_dir).to_string_lossy(),

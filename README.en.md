@@ -6,6 +6,8 @@ When your Mac slows down, StopCat shows "what is running and why" in plain langu
 
 When you start servers with AI and run many agents, you pile up ownerless processes, emulators and browsers left behind by finished tests, and ports open to the network. `stopcat` looks at your Mac **by project and AI session** instead of by process ID, and before stopping anything it explains **who started it and why**.
 
+![StopCat report screen](docs/screenshot.png)
+
 > **The user interface is in Korean.** The screen examples below are shown exactly as they appear; the English text explains what they mean.
 >
 > All screen examples in this document use synthetic data. Real values differ from Mac to Mac.
@@ -17,36 +19,38 @@ When you start servers with AI and run many agents, you pile up ownerless proces
 Just type `stopcat` in a terminal. A full-screen view opens; pick items with the arrow keys and press Enter to clean up.
 
 ```
-stopcat  메모리 정상 — 압력 1 · 압축 41GB · 스왑 1.6/2GB · 부하 5.8/18코어
-         확보 가능 1.5GB · 확인하면 +8.0GB · 직접 하면 +22GB
-[1 보고 9]  2 포트 6   3 자동 처리 기록 0   4 설정
-────────────────────────────────────────────────────────────────────────────────
-      대상                    크기  나이  근거                    지킴이
-필요 없음 3 · 정리하면 약 1.5GB · c 로 전부 정리
-> [ ] codex app-server       1.0GB  3일   주인 끝남·CPU 0·연결 0  불안정 시 자동
-  [ ] headless Chrome (Chr…  380MB  7시간 주인 끝남·CPU 0·연결 0  정리 추천
-  [ ] npm exec                84MB  3일   주인 끝남·CPU 0·연결 0  정리 추천
-확인 필요 3 · 쓰고 있는지 확실하지 않아 보고만 · 확인하면 약 8.0GB
-  [ ] Android 에뮬레이터 (…  7.5GB  3일   주인 끝남·CPU 3%·연결 6 확인 필요
-  [ ] appium (앱 테스트) :…  412MB  2일   주인 있음·안 쓰는 듯    확인 필요
-  [ ] 테스트 서버 (node) :…   96MB  1일   주인 끝남·CPU 0·연결 …  확인 필요
-일하는 중 1 · 건드리지 않음
-  [ ] Next.js 개발 서버             2시간 주인 있음·CPU 103%      건드리지 않음
-직접 하면 확보 2 · 약 22GB · 방법은 w
+█▀ ▀█▀ █▀█ █▀█ █▀▀ ▄▀█ ▀█▀  ● 메모리 정상 · 압력 1 · 압축 41GB · 스왑 1.6/2GB
+▄█  █  █▄█ █▀▀ █▄▄ █▀█  █   확보 가능 1.5GB · 확인하면 +8.0GB · 직접 하면 +22GB
+ 1 보고 9   2 포트 6   3 자동 처리 기록 0   4 설정             Made by Withgenie
+    대상                   크기  나이   근거                    지킴이
+ 필요 없음 3   정리하면 약 1.5GB · c 로 전부 정리
+❯ ○ codex app-server      1.0GB  3일    주인 끝남·CPU 0·연결 0  ◷ 불안정 시 자동
+  ○ headless Chrome (Ch…  380MB  7시간  주인 끝남·CPU 0·연결 0  ◆ 정리 추천
+  ○ npm exec               84MB  3일    주인 끝남·CPU 0·연결 0  ◆ 정리 추천
+ 확인 필요 3   쓰고 있는지 확실하지 않아 보고만 · 확인하면 약 8.0GB
+  ○ Android 에뮬레이터 …  7.5GB  3일    주인 끝남·CPU 3%·연결 6 ▲ 확인 필요
+  ○ appium (앱 테스트) …  412MB  2일    주인 있음·안 쓰는 듯    ▲ 확인 필요
+  ○ 테스트 서버 (node) …   96MB  1일    주인 끝남·CPU 0·연결 …  ▲ 확인 필요
+ 일하는 중 1   건드리지 않음
+  ○ Next.js 개발 서버            2시간  주인 있음·CPU 103%      ● 건드리지 않음
+ 직접 하면 확보 2   약 22GB · 방법은 w
   ↓ 2줄 더 있어요(↓ 로 내려 보기)
-─ 자세히: codex app-server ─────────────────────────────────────────────────────
-무엇    codex app-server — 띄운 Claude 세션 종료됨, 자식 29개 1.0GB
-근거    주인 끝남 · CPU 0% · 연결 0 · 디스크 0 · 평생 CPU 낮음 · 신뢰도 확실
-대상    pid 51234 · 3일 2시간째 · 프로젝트 warmtalent-ai
-지킴이  평소에는 보고만 해요. 맥이 불안정해지면 자동으로 정리해요.
-─ 지킴이 안정화 자동 · 평소 보고만 · 확인 17:53:20 ─────────────────────────────
+╭─ 자세히 · codex app-server ──────────────────────────────────────────────────╮
+│ 무엇    codex app-server — 띄운 Claude 세션 종료됨, 자식 29개 1.0GB          │
+│ 근거    주인 끝남 · CPU 0% · 연결 0 · 디스크 0 · 평생 CPU 낮음 · 신뢰도 확실 │
+│ 대상    pid 51234 · 3일 2시간째 · 프로젝트 warmtalent-ai                     │
+│ 지킴이  평소에는 보고만 해요. 맥이 불안정해지면 자동으로 정리해요.           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ 지킴이 안정화 자동  평소 보고만   확인 17:53:20
 ↑↓ 이동  스페이스 고르기  Enter 정리  c 추천 전부 정리  w 자세히  ? 도움말  q 끝
 ```
 
 - On **first run**, one screen explains what the guard will do automatically. Enter = start with Stabilize auto, n = Report only. Your choice is saved and can be changed at any time on the Settings screen (4).
-- The top two lines show the memory status and how much you could get back (reclaimable now · after you check · if you do it yourself). The guard status (level; report-only, unstable, paused, or circuit breaker; last check time) is right above the key line.
+- The top two lines show the STOPCAT logo on the left and, on the right, the memory status and how much you could get back (reclaimable now · after you check · if you do it yourself). The values use the same colors as the list sections. The guard status (level; report-only, unstable, paused, or circuit breaker; last check time) is in the colored bar right above the key line.
 - There are four screens: **1 Report** (in the order Not needed → Needs checking → Working → Reclaim it yourself, each row with a summary of the evidence), **2 Ports**, **3 Auto-action log** (what the guard did: time, what, why, how much was reclaimed), **4 Settings**.
-- The guard column in the list: `정리 추천` (recommended to clean up), `불안정 시 자동` (report only normally; the guard cleans it up when the Mac becomes unstable), `자동 예정 1/2` (only when unstable; consecutive checks in progress), `확인 필요` (needs checking), `건드리지 않음` (in use right now; left alone), `직접 하면 확보` (reclaim it yourself), `앱 재시작 필요` (app restart needed), `우선순위 낮춤` (priority lowered by you).
+- The guard column in the list: `◆ 정리 추천` (recommended to clean up), `◷ 불안정 시 자동` (report only normally; the guard cleans it up when the Mac becomes unstable), `◑ 자동 예정 1/2` (only when unstable; consecutive checks in progress), `▲ 확인 필요` (needs checking), `● 건드리지 않음` (in use right now; left alone), `◇ 직접 하면 확보` (reclaim it yourself), `↻ 앱 재시작 필요` (app restart needed), `▽ 우선순위 낮춤` (priority lowered by you), `⊘ 차단기: 보고만` (circuit breaker; report only).
+- `❯` marks the current row; `○`/`◉` show selection (Space).
+- Colors adapt to the terminal: true color when `COLORTERM=truecolor`, otherwise 256 colors, and monochrome (bold and reverse only) with `NO_COLOR` or `--no-color`. The palette stays readable on light-background terminals too.
 - If the window is smaller than 80×24, only "please make the window a little bigger" is shown.
 
 ### Keys
@@ -245,6 +249,7 @@ You can change this folder with the `STOPCAT_STATE_DIR` environment variable.
 | `STOPCAT_E2E_ALLOW_PIDS` | Test lock: send signals only to the listed process IDs (comma-separated; empty blocks everything) |
 | `STOPCAT_E2E_FORCE_HEALTH=watch\|critical` | For testing. Read only together with `STOPCAT_E2E_ALLOW_PIDS`; makes the guard treat the Mac as unstable (the health shown on screen stays real). Do not use normally |
 | `NO_COLOR` | No color (the full screen becomes monochrome) |
+| `COLORTERM=truecolor` | Draw the full screen in true color (256 colors otherwise). Most terminals set this for you |
 
 ## Privacy
 
