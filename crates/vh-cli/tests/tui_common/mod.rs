@@ -81,7 +81,7 @@ pub fn update_from(
     }
 }
 
-/// 정상 상태: 안전 자동, codex가 자동 예정 1/2.
+/// 안정화 자동, codex가 자동 예정 1/2.
 pub fn normal_update() -> Update {
     let s = snapshot();
     let rep = report(&s);
@@ -129,6 +129,7 @@ pub fn manual(request_id: u64, outcomes: Vec<ActionOutcome>) -> ManualResult {
         request_id,
         outcomes,
         state_dir: "/Users/demo/Library/Application Support/vibe-health".into(),
+        refused: vec![],
     }
 }
 

@@ -154,6 +154,8 @@ fn enter_preview_then_y_runs_exactly_once() {
 fn empty_plan_preview_never_runs() {
     let mut m = main_model();
     m.dialog = Some(Dialog::Preview {
+        title: "정리 미리보기",
+        bulk: false,
         plan: ActionPlan {
             created_at_unix_ms: T0,
             total_deadline_ms: 60_000,
@@ -372,4 +374,156 @@ fn updates_prune_selection_keep_cursor_and_cap_events() {
     assert!(m.events.iter().all(|e| e.kind != GuardEventKind::Skipped));
     assert_eq!(m.events[0].detail_ko, "알림 같음");
     assert_ne!(m.events[1].detail_ko, "알림 같음");
+}
+
+fn origin_of(fx: &[Effect]) -> Option<vh_act::PlanOrigin> {
+    sends(fx).into_iter().find_map(|c| match c {
+        Cmd::RunPlan { origin, .. } => Some(*origin),
+        _ => None,
+    })
+}
+
+fn plan_of(fx: &[Effect]) -> Option<&ActionPlan> {
+    sends(fx).into_iter().find_map(|c| match c {
+        Cmd::RunPlan { plan, .. } => Some(plan),
+        _ => None,
+    })
+}
+
+/// c: 확인 필요·일하는 중·직접 하면 확보가 섞이고, 그중 일부를 미리 골라 둬도 '필요 없음'만 계획한다.
+#[test]
+fn c_plans_only_unneeded_even_with_other_rows_selected() {
+    let mut m = main_model();
+    for pid in [40001, 3000] {
+        cursor_to(&mut m, pid);
+        m.on_key(ch(' '));
+    }
+    assert_eq!(m.selected.len(), 2);
+    assert!(m.on_key(ch('c')).is_empty());
+    let Some(Dialog::Preview { bulk, plan, .. }) = &m.dialog else {
+        panic!("{:?}", m.dialog)
+    };
+    assert!(*bulk);
+    let rep = m.latest.as_ref().unwrap().report.clone();
+    let want: std::collections::BTreeSet<ProcRef> = rep
+        .findings
+        .iter()
+        .filter(|f| f.section == Section::Unneeded)
+        .flat_map(|f| f.targets.iter().copied())
+        .collect();
+    let got: std::collections::BTreeSet<ProcRef> = plan.items.iter().map(|a| a.target).collect();
+    assert_eq!(got, want);
+    for f in rep
+        .findings
+        .iter()
+        .filter(|f| f.section != Section::Unneeded)
+    {
+        for t in &f.targets {
+            assert!(
+                !plan.items.iter().any(|a| a.target == *t),
+                "{:?}",
+                f.section
+            );
+            assert!(
+                !plan.refused.iter().any(|x| x.target == *t),
+                "{:?}",
+                f.section
+            );
+        }
+    }
+    let fx = m.on_key(ch('y'));
+    assert_eq!(run_plans(&fx), 1);
+    assert_eq!(origin_of(&fx), Some(vh_act::PlanOrigin::Bulk));
+    assert_eq!(plan_of(&fx).unwrap().items.len(), want.len());
+    assert_eq!(m.selected.len(), 2, "c는 고른 것을 바꾸지 않는다");
+}
+
+#[test]
+fn c_with_nothing_unneeded_opens_nothing() {
+    let s = snapshot();
+    let mut rep = report(&s);
+    for f in &mut rep.findings {
+        if f.section == Section::Unneeded {
+            f.section = Section::Check;
+        }
+    }
+    let mut m = Model::new(Some(done_config(AutoLevel::Safe)), None, false);
+    m.apply(update_from(rep, AutoLevel::Safe, |_, _| {}));
+    assert!(m.on_key(ch('c')).is_empty());
+    assert!(m.dialog.is_none());
+    assert_eq!(m.flash.as_deref(), Some(vh_cli::tui::state::C_NOTHING));
+}
+
+#[test]
+fn pointed_working_pick_runs_once_on_y() {
+    let mut m = main_model();
+    cursor_to(&mut m, 3000);
+    m.on_key(ch(' '));
+    assert_eq!(m.flash.as_deref(), Some(vh_cli::tui::state::PICK_WORKING));
+    m.on_key(key(KeyCode::Enter));
+    let Some(Dialog::Preview { bulk, lines, .. }) = &m.dialog else {
+        panic!("{:?}", m.dialog)
+    };
+    assert!(!*bulk);
+    assert_eq!(lines[0], vh_cli::tui::state::WARN_WORKING);
+    let fx = m.on_key(ch('y'));
+    assert_eq!(run_plans(&fx), 1);
+    assert_eq!(origin_of(&fx), Some(vh_act::PlanOrigin::Pointed));
+    let pids: Vec<i32> = plan_of(&fx)
+        .unwrap()
+        .items
+        .iter()
+        .map(|a| a.target.pid)
+        .collect();
+    assert_eq!(
+        pids,
+        vec![3000],
+        "직접 지목은 쓰고 있어도 R18로 막지 않는다(경고만)"
+    );
+}
+
+#[test]
+fn manual_rows_are_not_selectable() {
+    let mut m = main_model();
+    for pid in [2001, 8101] {
+        cursor_to(&mut m, pid);
+        m.on_key(ch(' '));
+        assert!(m.selected.is_empty());
+        assert_eq!(m.flash.as_deref(), Some(NOT_ACTIONABLE));
+    }
+}
+
+#[test]
+fn d_demotes_cursor_target_only_after_y() {
+    let mut m = main_model();
+    cursor_to(&mut m, 3000);
+    assert!(m.on_key(ch('d')).is_empty());
+    let Some(Dialog::Preview { title, plan, .. }) = &m.dialog else {
+        panic!("{:?}", m.dialog)
+    };
+    assert_eq!(*title, vh_cli::tui::state::DEMOTE_TITLE);
+    assert_eq!(plan.items.len(), 1);
+    assert_eq!(plan.items[0].steps, vec![Step::Demote]);
+    assert_eq!(run_plans(&m.on_key(ch('n'))), 0);
+
+    m.on_key(ch('d'));
+    let fx = m.on_key(ch('y'));
+    assert_eq!(run_plans(&fx), 1);
+    assert_eq!(origin_of(&fx), Some(vh_act::PlanOrigin::Pointed));
+    let p = plan_of(&fx).unwrap();
+    assert_eq!(p.items[0].target.pid, 3000);
+    assert!(p.items.iter().all(|a| a.steps == vec![Step::Demote]));
+
+    let mut m = main_model();
+    cursor_to(&mut m, 2001);
+    m.on_key(ch('d'));
+    let Some(Dialog::Preview { plan, lines, .. }) = &m.dialog else {
+        panic!("{:?}", m.dialog)
+    };
+    assert!(plan.items.is_empty(), "AI 세션은 낮추지 않음(보호 규칙)");
+    assert!(
+        lines.iter().any(|l| l.starts_with("낮추지 않아요: ")),
+        "{lines:?}"
+    );
+    assert_eq!(run_plans(&m.on_key(ch('y'))), 0);
 }

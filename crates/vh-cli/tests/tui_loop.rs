@@ -227,7 +227,10 @@ fn guard_disconnect_and_thread_panic_show_banner() {
     let mut m = main_model();
     go(&mut m, &mut host, vec![Step::Disconnect, Step::Tick], true);
     assert!(m.guard_dead.is_some());
-    assert!(render(&mut m, 80, 24)[1].contains("멈췄어요"));
+    assert!(
+        render(&mut m, 80, 24)[22].contains("멈췄어요"),
+        "지킴이 줄은 키 줄 바로 위"
+    );
 
     let mut host = FakeHost {
         thread_panic: Some("지킴이 스레드 패닉".into()),

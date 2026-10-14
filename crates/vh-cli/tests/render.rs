@@ -33,9 +33,9 @@ fn fix_plan(s: &Snapshot, rep: &Report) -> ActionPlan {
         created_at_unix_ms: T0,
         total_deadline_ms: 60_000,
         items: vec![
-            planned(s, rep, 40001, false),
             planned(s, rep, 51234, true),
             planned(s, rep, 40200, false),
+            planned(s, rep, 51230, false),
         ],
         refused: vec![],
     }
@@ -227,12 +227,19 @@ fn status_normal() {
         &screen("vh (정상, 주의 항목 있음)"),
         &[
             "메모리 정상 — 압력 1 · 압축 41GB · 스왑 1.6/2GB · 부하 5.8/18코어",
-            "주의  omo 세션(bun) 22GB, 5일째, warmtalent-ai → 핸드오프 후 재시작 권장",
-            "고아  codex app-server — 띄운 Claude 세션 종료됨, 자식 29개 1.0GB",
-            "잔재  Android 에뮬레이터 7.5GB · appium :4723 · headless Chrome 7시간 외 1건",
+            "확보 가능 1.5GB · 확인하면 +8.0GB · 직접 하면 +22GB",
+            "필요 없음  codex app-server 1.0GB — 주인 끝남·CPU 0·연결 0",
+            "필요 없음  npm exec 84MB — 주인 끝남·CPU 0·연결 0",
+            "필요 없음  headless Chrome (Chrome for Testing) 380MB — 주인 끝남·CPU 0·연결 0",
+            "확인 필요  Android 에뮬레이터 (qemu) 7.5GB — 주인 끝남·CPU 3%·연결 6",
+            "확인 필요  appium (앱 테스트) 412MB — 주인 있음·안 쓰는 듯",
+            "확인 필요  테스트 서버 (node) 96MB — 주인 끝남·CPU 0·연결 모름",
+            "일하는 중  Next.js 개발 서버 — 주인 있음·CPU 103% · 건드리지 않음",
+            "직접 하면  omo 세션(bun) 22GB — 핸드오프 저장 후 재시작",
+            "직접 하면  aside 좀비 20개 — 띄운 앱 다시 시작",
             "노출  Qdrant 0.0.0.0:6333 · appium *:4723",
             "충돌  AirPlay :5000·:7000",
-            "→ vh fix 로 최대 약 9.3GB 회수 (미리보기 → 확인)",
+            "→ vh fix 로 '필요 없음' 약 1.5GB 정리 (미리보기 → 확인)",
         ],
     );
 }
@@ -244,6 +251,7 @@ fn status_nothing() {
         &screen("vh (정상, 정리할 것 없음)"),
         &[
             "메모리 정상 — 압력 1 · 압축 3.2GB · 스왑 없음 · 부하 2.1/18코어",
+            "지금 확보할 것이 없어요",
             "지금 정리할 것이 없어요. 맥 상태가 좋아요.",
         ],
     );
@@ -257,16 +265,21 @@ fn status_crisis() {
         &[
             "메모리 위험 — 압력 4 · 압축 58GB · 스왑 14.2/16GB · 부하 31.5/18코어",
             "  스왑을 많이 쓰고 있어요. 앱이 멈추거나 아주 느려질 수 있어요.",
-            "주의  omo 세션(bun) 22GB, 5일째, warmtalent-ai → 핸드오프 후 재시작 권장",
-            "주의  tsserver 1번째 3.0GB — 워크트리마다 하나씩",
-            "주의  tsserver 2번째 3.0GB — 워크트리마다 하나씩",
-            "고아  codex app-server — 띄운 Claude 세션 종료됨, 자식 29개 1.0GB",
-            "잔재  Android 에뮬레이터 7.5GB · appium :4723 · headless Chrome 7시간 외 1건",
+            "확보 가능 1.5GB · 확인하면 +8.0GB · 직접 하면 +22GB",
+            "필요 없음  codex app-server 1.0GB — 주인 끝남·CPU 0·연결 0",
+            "필요 없음  npm exec 84MB — 주인 끝남·CPU 0·연결 0",
+            "필요 없음  headless Chrome (Chrome for Testing) 380MB — 주인 끝남·CPU 0·연결 0",
+            "확인 필요  npm exec — 주인 끝남·CPU 0·연결 0",
+            "확인 필요  테스트 서버 (node) — 주인 끝남·CPU 0·연결 모름",
+            "확인 필요  Android 에뮬레이터 (qemu) 7.5GB — 주인 끝남·CPU 3%·연결 6",
+            "  … 외 2건(전체: vh --json)",
+            "일하는 중  Next.js 개발 서버 — 주인 있음·CPU 103% · 건드리지 않음",
+            "일하는 중  Next.js 개발 서버 — 주인 있음·CPU 103% · 건드리지 않음",
+            "직접 하면  omo 세션(bun) 22GB — 핸드오프 저장 후 재시작",
+            "직접 하면  aside 좀비 20개 — 띄운 앱 다시 시작",
             "노출  Qdrant 0.0.0.0:6333 · appium *:4723",
             "충돌  AirPlay :5000·:7000",
-            "  … 외 1건은 vh fix 미리보기에서 볼 수 있어요",
-            "→ vh fix 로 최대 약 9.3GB 회수 (미리보기 → 확인)",
-            "  AI 에이전트 세션은 vh가 끄지 않아요. 대화를 저장한 뒤 직접 다시 켜세요.",
+            "→ vh fix 로 '필요 없음' 약 1.5GB 정리 (미리보기 → 확인)",
         ],
     );
 }
@@ -287,6 +300,7 @@ fn why_pid() {
             "      1  launchd — macOS 시스템",
             "발견",
             "  고아(띄운 세션 종료)  확실 — codex app-server — 띄운 Claude 세션 종료됨, 자식…",
+            "구역: 필요 없음 — 주인 끝남 · CPU 0% · 연결 0 · 디스크 0 · 평생 CPU 낮음",
             "요약: Claude 세션이 끝난 뒤 남은 codex 서버예요. vh fix 로 정리할 수 있어요.",
         ],
     );
@@ -309,6 +323,7 @@ fn why_port() {
             "발견",
             "  고아  가능성 높음 — appium이 혼자 남음",
             "  노출  확실 — 이 맥 밖에서도 접속할 수 있어요",
+            "구역: 확인 필요 — 주인 있음 · CPU 0% · 연결 0 · 디스크 0 · 안 쓰는 듯",
             "요약: 테스트가 끝난 뒤 남은 appium이에요. 같은 와이파이의 다른 기기에서도 접속할",
             "      수 있으니, 쓰지 않으면 vh kill :4723 으로 끄세요.",
         ],
@@ -357,20 +372,24 @@ fn fix_preview() {
         "vh fix (미리보기)",
         &screen("vh fix (미리보기)"),
         &[
-            "정리 미리보기 — 3건, 최대 약 8.9GB 회수 예상",
-            "기준: 확실 + 가능성 높음 (확인하고 실행할 때 기본값)",
-            "  1. Android 에뮬레이터 (qemu)                         7.5GB  가능성 높음",
-            "     이유: 띄운 창이 닫혀 혼자 남았어요 · 3일째",
-            "     방법: 정상 종료 → 3초 기다림 → 안 꺼지면 강제 종료",
-            "  2. codex app-server (자식 29개 포함)                 1.0GB  확실",
+            "정리 미리보기 — 3건, 최대 약 1.5GB 회수 예상",
+            "기준: '필요 없음'만 · 확실 + 가능성 높음 (확인하고 실행할 때 기본값)",
+            "  1. codex app-server (자식 29개 포함)                 1.0GB  확실",
             "     이유: 띄운 Claude 세션이 이미 끝났어요",
             "     방법: 자식부터 정상 종료 → 3초 기다림 → 안 꺼지면 강제 종료",
-            "  3. headless Chrome (Chrome for Testing)              380MB  가능성 높음",
+            "  2. headless Chrome (Chrome for Testing)              380MB  가능성 높음",
             "     이유: 테스트용 브라우저가 7시간째 남아 있어요",
+            "     방법: 정상 종료 → 3초 기다림 → 안 꺼지면 강제 종료",
+            "  3. npm exec                                           84MB  가능성 높음",
+            "     이유: 띄운 터미널이 닫혔는데 남아 있어요",
             "     방법: 정상 종료 → 3초 기다림 → 안 꺼지면 강제 종료",
             "건드리지 않는 것",
             "  omo 세션 22GB — AI 세션은 끄지 않아요. 핸드오프 저장 후 직접 재시작",
+            "  Android 에뮬레이터 (qemu) — 확인 필요라 뺐어요. 직접: vh fix --only 40001",
+            "  appium (앱 테스트) — 확인 필요라 뺐어요. 직접: vh fix --only 40112",
             "  aside 좀비 20개 — 끌 수 없어요. 띄운 앱을 다시 시작하세요",
+            "  테스트 서버 (node) — 확인 필요라 뺐어요. 직접: vh fix --only 61822",
+            "  … 외 1건",
             "정리할까요? [y/N] ",
         ],
     );
@@ -384,7 +403,7 @@ fn fix_non_tty_tail() {
         ls[ls.len() - 2..],
         [
             "확인 없이 실행하지 않았어요. 실행하려면: vh fix --yes",
-            "  (--yes 로 실행하면 '확실'인 것만 정리해요)",
+            "  (--yes 로 실행하면 '필요 없음' 중 '확실'인 것만 정리해요)",
         ]
     );
     assert!(ls[0].starts_with("정리 미리보기 — "), "{text}");
@@ -405,10 +424,10 @@ fn fix_results() {
         "vh fix (실행 결과)",
         &screen("vh fix (실행 결과)"),
         &[
-            "정리 결과 — 3건 중 3건 종료, 예상 회수 약 8.9GB",
-            "  종료됨          Android 에뮬레이터 (qemu) — 정상 종료",
+            "정리 결과 — 3건 중 3건 종료, 예상 회수 약 1.5GB",
             "  종료됨          codex app-server (자식 29개 포함) — 정상 종료",
-            "  종료됨          headless Chrome (Chrome for Testing) — 3초 뒤 강제 종료",
+            "  종료됨          headless Chrome (Chrome for Testing) — 정상 종료",
+            "  종료됨          npm exec — 3초 뒤 강제 종료",
             "기록: ~/Library/Application Support/vibe-health/audit.jsonl",
             "되살릴 때 필요한 정보도 같은 폴더에 저장했어요.",
         ],
@@ -421,10 +440,10 @@ fn fix_partial_results() {
         "vh fix (일부 실패 결과)",
         &screen("vh fix (일부 실패 결과)"),
         &[
-            "정리 결과 — 3건 중 1건 종료, 1건 남음, 1건 이미 없음, 예상 회수 약 7.5GB",
-            "  종료됨          Android 에뮬레이터 (qemu) — 정상 종료",
-            "  아직 살아 있음  headless Chrome (Chrome for Testing) — 강제 종료 신호에도 남…",
-            "  이미 없음       codex app-server (자식 29개 포함) — 확인하는 사이에 스스로 끝…",
+            "정리 결과 — 3건 중 1건 종료, 1건 남음, 1건 이미 없음, 예상 회수 약 1.0GB",
+            "  종료됨          codex app-server (자식 29개 포함) — 정상 종료",
+            "  아직 살아 있음  npm exec — 강제 종료 신호에도 남아 있어요",
+            "  이미 없음       headless Chrome (Chrome for Testing) — 확인하는 사이에 스스로…",
             "기록: ~/Library/Application Support/vibe-health/audit.jsonl",
             "되살릴 때 필요한 정보도 같은 폴더에 저장했어요.",
         ],
@@ -525,13 +544,13 @@ fn color_only_when_enabled() {
 fn same_short_names_collapse_and_pid_errors_are_quiet() {
     let mut s = snapshot();
     let mut rep = report(&s);
-    let chrome = rep
+    let qdrant = rep
         .findings
         .iter()
-        .find(|f| f.kind == FindingKind::HeadlessBrowserLeftover)
+        .find(|f| f.kind == FindingKind::ExposedListener && f.targets[0].pid == 6333)
         .unwrap()
         .clone();
-    let mut twin = chrome.clone();
+    let mut twin = qdrant.clone();
     twin.id.push_str(":twin");
     rep.findings.push(twin);
     s.collection_errors.push(CollectionError {
@@ -541,7 +560,7 @@ fn same_short_names_collapse_and_pid_errors_are_quiet() {
         message: "proc_pidpath 실패".into(),
     });
     let text = status::render(&s, &rep, false);
-    assert!(text.contains("headless Chrome 7시간 ×2"), "{text}");
+    assert!(text.contains("노출  Qdrant 0.0.0.0:6333 ×2"), "{text}");
     assert!(!text.contains("읽지 못했어요"), "{text}");
     s.collection_errors.push(CollectionError {
         pid: None,

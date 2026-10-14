@@ -4,9 +4,11 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use vh_act::PlanOrigin;
+
 use vh_model::{
-    ActionOutcome, ActionPlan, AutoLevel, GuardEvent, GuardPolicy, GuardStatus, ProcRef, Report,
-    Snapshot,
+    ActionOutcome, ActionPlan, AutoLevel, GuardEvent, GuardPolicy, GuardStatus, ProcRef, Refusal,
+    Report, Snapshot,
 };
 
 /// 지킴이가 스캔마다 보내는 갱신.
@@ -26,6 +28,8 @@ pub struct ManualResult {
     pub request_id: u64,
     pub outcomes: Vec<ActionOutcome>,
     pub state_dir: PathBuf,
+    /// 지킴이가 실행 직전 다시 본 '쓰고 있음'(R18)으로 뺀 항목. 직접 지목이면 비어 있다.
+    pub refused: Vec<Refusal>,
 }
 
 /// 화면 → 지킴이 명령. 보내기는 막히지 않는다.
@@ -42,6 +46,8 @@ pub enum Cmd {
         request_id: u64,
         plan: ActionPlan,
         snapshot: Arc<Snapshot>,
+        /// 한 키 일괄(`c`)은 Bulk, 한 항목 직접 지목(Enter·d)은 Pointed.
+        origin: PlanOrigin,
     },
 }
 

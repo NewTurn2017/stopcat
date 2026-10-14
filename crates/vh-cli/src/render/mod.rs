@@ -2,6 +2,7 @@
 
 pub mod action;
 pub mod ports;
+pub mod section;
 pub mod status;
 pub mod why;
 
@@ -159,7 +160,7 @@ pub(crate) fn finding_kind_ko(k: FindingKind) -> &'static str {
         FindingKind::Duplicate => "중복",
         FindingKind::Zombie => "좀비",
         FindingKind::Stopped => "멈춤",
-        FindingKind::HighCpu => "CPU 폭주",
+        FindingKind::HighCpu => "CPU 많이 씀",
         FindingKind::HeavyProcess => "무거움",
         FindingKind::HeavyAgentSession => "무거운 AI 세션",
         FindingKind::HeadlessBrowserLeftover => "남은 테스트 브라우저",

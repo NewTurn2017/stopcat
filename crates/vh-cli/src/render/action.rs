@@ -4,11 +4,11 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use vh_model::{
-    ActionOutcome, ActionPlan, FinalState, PlannedAction, ProcRef, Report, Snapshot, Step,
+    ActionOutcome, ActionPlan, FinalState, PlannedAction, ProcRef, Report, Section, Snapshot, Step,
     Suggestion,
 };
 
-use super::{Lookup, Out, confidence_ko};
+use super::{Lookup, Out, confidence_ko, section};
 use crate::color::Color;
 use crate::fmt;
 use crate::target::Target;
@@ -16,8 +16,13 @@ use crate::target::Target;
 pub const FIX_PROMPT: &str = "정리할까요? [y/N] ";
 pub const KILL_PROMPT: &str = "끌까요? [y/N] ";
 pub const DECLINED: &str = "취소했어요. 아무것도 끄지 않았어요.";
+pub const FIX_NOTHING: &str = "정리할 것이 없어요.";
 pub const FIX_NOT_RUN: &str = "확인 없이 실행하지 않았어요. 실행하려면: vh fix --yes";
-pub const FIX_YES_ONLY_CONFIRMED: &str = "  (--yes 로 실행하면 '확실'인 것만 정리해요)";
+pub const FIX_YES_ONLY_CONFIRMED: &str =
+    "  (--yes 로 실행하면 '필요 없음' 중 '확실'인 것만 정리해요)";
+pub const ONLY_WARN_WORKING: &str =
+    "     주의: 일하는 중이에요 — 지금 쓰고 있어요. 정리하면 하던 일이 끊겨요";
+pub const ONLY_WARN_CHECK: &str = "     주의: 확인 필요예요 — 쓰고 있는지 확실하지 않아요";
 
 const LEFT_COL: usize = 53;
 const MAX_UNTOUCHED: usize = 5;
@@ -84,7 +89,9 @@ pub fn fix_preview(
     }
 
     if plan.items.is_empty() {
-        o.line("정리할 것이 없어요.");
+        untouched(&mut o, &lk, plan);
+        o.line(FIX_NOTHING);
+        return o.finish();
     } else {
         let total: u64 = plan.items.iter().map(|i| i.est_reclaim_bytes).sum();
         o.colored(
@@ -115,6 +122,20 @@ pub fn fix_preview(
             o.wrap("     이유: ", "           ", reason);
             if only.contains(&a.target.pid) {
                 o.line("     직접 고른 대상이에요(--only)");
+                match finding.map(|f| f.section) {
+                    Some(Section::Working) => o.line(ONLY_WARN_WORKING),
+                    Some(Section::Check) => o.line(ONLY_WARN_CHECK),
+                    _ => {}
+                }
+                if let Some(f) =
+                    finding.filter(|f| matches!(f.section, Section::Working | Section::Check))
+                {
+                    let (_, long) =
+                        section::evidence_for(f, lk.classified(a.target), s.taken_at_unix_ms);
+                    if !long.is_empty() {
+                        o.wrap("     근거: ", "           ", &long);
+                    }
+                }
             }
             o.line(&format!("     방법: {}", ladder(a)));
         }
@@ -128,19 +149,31 @@ fn untouched(o: &mut Out, lk: &Lookup<'_>, plan: &ActionPlan) {
     let mut seen: BTreeSet<ProcRef> = plan.items.iter().map(|i| i.target).collect();
     let mut lines: Vec<String> = Vec::new();
     for f in &lk.r.findings {
-        let text = match f.suggestion {
-            Suggestion::HandoffThenRestart => "AI 세션은 끄지 않아요. 핸드오프 저장 후 직접 재시작",
-            Suggestion::RestartParent { .. } => "끌 수 없어요. 띄운 앱을 다시 시작하세요",
+        let pid = f.targets.first().map_or(0, |t| t.pid);
+        let text = match (f.section, &f.suggestion) {
+            (_, Suggestion::HandoffThenRestart) => {
+                "AI 세션은 끄지 않아요. 핸드오프 저장 후 직접 재시작".to_string()
+            }
+            (_, Suggestion::RestartParent { .. }) => {
+                "끌 수 없어요. 띄운 앱을 다시 시작하세요".to_string()
+            }
+            (Section::Check, _) => format!("확인 필요라 뺐어요. 직접: vh fix --only {pid}"),
+            (Section::Working, _) => "일하는 중이라 뺐어요".to_string(),
             _ => continue,
         };
         if f.targets.iter().all(|t| seen.contains(t)) {
             continue;
         }
         seen.extend(f.targets.iter().copied());
-        let name = if f.short_ko.is_empty() {
-            &f.title_ko
-        } else {
-            &f.short_ko
+        let name = match f.targets.first().map(|t| lk.label(*t)) {
+            Some(l)
+                if f.targets.len() == 1
+                    && matches!(f.section, Section::Check | Section::Working) =>
+            {
+                l
+            }
+            _ if f.short_ko.is_empty() => f.title_ko.clone(),
+            _ => f.short_ko.clone(),
         };
         lines.push(format!("  {name} — {text}"));
     }

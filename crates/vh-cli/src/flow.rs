@@ -59,12 +59,17 @@ pub fn min_confidence(explicit: Option<Confidence>, only: bool, yes: bool) -> (C
 
 pub fn basis_ko(b: Basis, c: Confidence) -> String {
     match b {
-        Basis::Explicit => format!("{} 이상 (--min-confidence)", confidence_ko(c)),
+        Basis::Explicit => format!(
+            "'필요 없음'만 · {} 이상 (--min-confidence)",
+            confidence_ko(c)
+        ),
         Basis::Only => {
-            "직접 고른 대상(--only)은 신뢰도와 상관없이 포함 · 보호 규칙은 그대로".to_string()
+            "직접 고른 대상(--only)은 구역·신뢰도와 상관없이 포함 · 보호 규칙은 그대로".to_string()
         }
-        Basis::Yes => "확실한 것만 (--yes 로 바로 실행할 때 기본값)".to_string(),
-        Basis::Confirm => "확실 + 가능성 높음 (확인하고 실행할 때 기본값)".to_string(),
+        Basis::Yes => "'필요 없음'만 · 확실한 것만 (--yes 로 바로 실행할 때 기본값)".to_string(),
+        Basis::Confirm => {
+            "'필요 없음'만 · 확실 + 가능성 높음 (확인하고 실행할 때 기본값)".to_string()
+        }
     }
 }
 

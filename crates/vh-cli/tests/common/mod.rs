@@ -331,8 +331,7 @@ fn view(
 
 pub const EXPOSED: &str = "같은 와이파이의 다른 기기에서도 접속할 수 있어요";
 
-/// 실측 사례 모양의 정상 리포트(주의 항목 있음).
-pub fn report(s: &Snapshot) -> Report {
+fn report_w3(s: &Snapshot) -> Report {
     use Confidence::*;
     use FindingKind::*;
     let term = |d: bool| Suggestion::Terminate {
@@ -572,6 +571,116 @@ pub fn report(s: &Snapshot) -> Report {
     }
 }
 
+fn usage(
+    state: UsageState,
+    owner: OwnerState,
+    reasons: &[UsageReason],
+    cpu: f32,
+    peers: u32,
+) -> Usage {
+    Usage {
+        state,
+        owner,
+        reasons: reasons.to_vec(),
+        subtree_procs: 1,
+        subtree_cpu_pct: Some(cpu),
+        subtree_disk_delta_bytes: Some(0),
+        outside_peer_count: peers,
+    }
+}
+
+/// 실측 사례 모양의 정상 리포트. 구역마다 한 건 이상(W4):
+/// 필요 없음 = codex(자동 대상 종류)·headless Chrome·npm exec(자동 대상 아닌 종류),
+/// 확인 필요 = 에뮬레이터(주인 끝남·쓰는 중)·appium(주인 살아 있음·안 쓰는 듯)·테스트 서버(가능성 있음),
+/// 일하는 중 = Next.js 개발 서버(CPU 103%), 직접 하면 확보 = omo 세션·aside 좀비, 정보 = 노출·충돌.
+pub fn report(s: &Snapshot) -> Report {
+    use OwnerState as O;
+    use UsageReason::*;
+    use UsageState as U;
+    let mut rep = report_w3(s);
+    let review = Suggestion::Review;
+    for f in &mut rep.findings {
+        let pid = f.targets[0].pid;
+        f.section = match (f.kind, pid) {
+            (FindingKind::ExposedListener | FindingKind::KnownPortConflict, _) => Section::Info,
+            (_, 2001 | 8101) => Section::Manual,
+            (_, 51234 | 40200) => Section::Unneeded,
+            _ => Section::Check,
+        };
+        if matches!(pid, 40001 | 40112) && f.kind == FindingKind::Orphan {
+            f.suggestion = review.clone();
+        }
+        if pid == 2001 {
+            f.reclaim_bytes = 22 * GIB;
+        }
+    }
+    rep.findings.insert(
+        2,
+        finding(
+            s,
+            FindingKind::Orphan,
+            Confidence::Likely,
+            51230,
+            "npm exec가 혼자 남음",
+            "npm exec",
+            "띄운 터미널이 닫혔는데 남아 있어요",
+            84 * MIB,
+            0,
+            Suggestion::Terminate {
+                include_descendants: false,
+            },
+        ),
+    );
+    rep.findings[2].section = Section::Unneeded;
+    let mut busy = finding(
+        s,
+        FindingKind::HighCpu,
+        Confidence::Confirmed,
+        3000,
+        "Next.js 개발 서버가 CPU 103%를 쓰는 중",
+        "Next.js 개발 서버",
+        "주인 세션이 살아 있고 CPU를 쓰고 있어요",
+        0,
+        0,
+        review,
+    );
+    busy.section = Section::Working;
+    rep.findings.push(busy);
+    for c in &mut rep.classified {
+        c.usage = match c.target.pid {
+            2001 => usage(U::Active, O::User, &[UserOwned, HasTty, CpuActive], 12.0, 0),
+            51234 | 40200 | 51230 => usage(
+                U::Idle,
+                O::Ended,
+                &[NoPeers, CpuIdle, DiskIdle, LifetimeCpuLow],
+                0.0,
+                0,
+            ),
+            40001 => usage(
+                U::Active,
+                O::Ended,
+                &[PeerOutsideSubtree, CpuActive],
+                2.8,
+                6,
+            ),
+            40112 => usage(
+                U::Idle,
+                O::Alive,
+                &[OwnerAlive, NoPeers, CpuIdle, DiskIdle],
+                0.0,
+                0,
+            ),
+            61822 => usage(U::Unknown, O::Ended, &[CpuIdle, PeersUnknown], 0.0, 0),
+            3000 => usage(U::Active, O::Alive, &[OwnerAlive, CpuActive], 103.0, 0),
+            _ => Usage::default(),
+        };
+    }
+    rep.totals.unneeded_bytes = GIB + 380 * MIB + 84 * MIB;
+    rep.totals.check_bytes = 7 * GIB + GIB / 2 + 412 * MIB + 96 * MIB;
+    rep.totals.manual_bytes = 22 * GIB;
+    rep
+}
+
 pub fn report_empty() -> Report {
     Report {
         schema_version: SCHEMA_VERSION,
@@ -618,6 +727,11 @@ pub fn report_crisis(s: &Snapshot) -> Report {
                 Suggestion::Review,
             ),
         );
+        rep.findings[1 + i].section = if pid == 3000 {
+            Section::Working
+        } else {
+            Section::Check
+        };
     }
     rep
 }

@@ -111,13 +111,13 @@ pub enum Command {
     #[command(override_usage = "vh ports [옵션]", help_template = HELP_TEMPLATE, next_help_heading = "옵션")]
     Ports,
 
-    /// 정리 미리보기, 확인하면 단계적으로 종료
+    /// '필요 없음' 정리 미리보기, 확인하면 단계적으로 종료
     #[command(override_usage = "vh fix [--yes] [--only <번호>]… [옵션]", help_template = HELP_TEMPLATE, next_help_heading = "옵션")]
     Fix {
         #[arg(
             short = 'y',
             long,
-            help = "묻지 않고 바로 정리(기본 기준: 확실한 것만)"
+            help = "묻지 않고 바로 정리('필요 없음' 중 확실한 것만)"
         )]
         yes: bool,
 

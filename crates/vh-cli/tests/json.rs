@@ -148,3 +148,28 @@ fn snapshot_hides_secrets_and_unlisted_env() {
         assert!(!o.contains(&openai) && !o.contains(&github), "{args:?}");
     }
 }
+
+/// schema_version 2: 최상위 키는 그대로, 새 정보(구역·사용 판정·구역별 확보량)는 report 안에.
+#[test]
+fn schema_v2_report_carries_sections_usage_totals() {
+    let be = Synth::new();
+    let ran = run(&be, &["--json"], false, "");
+    let v: serde_json::Value = serde_json::from_str(ran.out.trim()).unwrap();
+    assert_eq!(v["schema_version"], 2);
+    let allowed = ["unneeded", "check", "working", "manual", "info"];
+    let fs = v["report"]["findings"].as_array().unwrap();
+    assert!(!fs.is_empty());
+    for f in fs {
+        let s = f["section"].as_str().expect("section");
+        assert!(allowed.contains(&s), "{s}");
+    }
+    for c in v["report"]["classified"].as_array().unwrap() {
+        assert!(c["usage"]["state"].is_string(), "{c}");
+    }
+    for k in ["unneeded_bytes", "check_bytes", "manual_bytes"] {
+        assert!(v["report"]["totals"][k].is_u64(), "{k}");
+    }
+    let fix = run(&be, &["fix", "--json"], false, "");
+    let f: serde_json::Value = serde_json::from_str(fix.out.trim()).unwrap();
+    assert_eq!(f["schema_version"], 2);
+}

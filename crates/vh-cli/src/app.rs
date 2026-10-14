@@ -3,7 +3,9 @@
 use std::io::{BufRead, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use vh_act::{DirectTarget, ExecEnv, Policy, RealProber, RealSignaler, Selection, Signaler};
+use vh_act::{
+    DirectTarget, ExecEnv, PlanOrigin, Policy, RealProber, RealSignaler, Selection, Signaler,
+};
 use vh_model::{ActionPlan, Confidence, Explanation, ProcRef, Report, Snapshot};
 use vh_sample::CollectOptions;
 
@@ -376,13 +378,36 @@ fn dispatch(c: &Cli, io: &mut Io<'_>, be: &dyn Backend) -> Result<(), CliError> 
             let r = be.analyze(&s);
             let explicit = min_confidence.map(|m| m.to_model());
             let (conf, basis) = flow::min_confidence(explicit, !only.is_empty(), *yes);
-            let sel = Selection {
-                finding_ids: Vec::new(),
-                pids: only.clone(),
-                min_confidence: conf,
-                direct: Vec::new(),
+            let finding_ids = if only.is_empty() {
+                render::section::bulk_ids(&r.findings)
+            } else {
+                Vec::new()
             };
-            let plan = be.plan(&s, &r, &sel, &Policy::default());
+            let plan = if only.is_empty() && finding_ids.is_empty() {
+                ActionPlan {
+                    created_at_unix_ms: s.taken_at_unix_ms,
+                    total_deadline_ms: Policy::default().total_deadline_ms,
+                    items: Vec::new(),
+                    refused: Vec::new(),
+                }
+            } else {
+                let sel = Selection {
+                    finding_ids,
+                    pids: only.clone(),
+                    min_confidence: conf,
+                    direct: Vec::new(),
+                };
+                let origin = if only.is_empty() {
+                    PlanOrigin::Bulk
+                } else {
+                    PlanOrigin::Pointed
+                };
+                let policy = Policy {
+                    origin,
+                    ..Policy::default()
+                };
+                be.plan(&s, &r, &sel, &policy)
+            };
             let note = basis == flow::Basis::Confirm
                 && plan.items.iter().any(|i| {
                     r.findings
@@ -420,7 +445,11 @@ fn dispatch(c: &Cli, io: &mut Io<'_>, be: &dyn Backend) -> Result<(), CliError> 
                     .collect(),
                 ..Selection::default()
             };
-            let plan = be.plan(&s, &r, &sel, &Policy::default());
+            let policy = Policy {
+                origin: PlanOrigin::Pointed,
+                ..Policy::default()
+            };
+            let plan = be.plan(&s, &r, &sel, &policy);
             let req = flow::Request {
                 s: &s,
                 r: &r,

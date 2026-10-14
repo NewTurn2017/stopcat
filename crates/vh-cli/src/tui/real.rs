@@ -36,10 +36,12 @@ fn to_guard(c: Cmd) -> GuardCommand {
             request_id,
             plan,
             snapshot,
+            origin,
         } => GuardCommand::RunPlan {
             request_id,
             plan,
             snapshot,
+            origin,
         },
     }
 }
@@ -55,6 +57,7 @@ fn from_guard(u: GuardUpdate) -> Update {
             request_id: m.request_id,
             outcomes: m.outcomes,
             state_dir: m.state_dir,
+            refused: m.refused,
         }),
     }
 }

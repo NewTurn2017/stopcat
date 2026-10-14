@@ -1,8 +1,8 @@
 //! `vh why <pid | :port>` 화면.
 
-use vh_model::{Explanation, Report, Snapshot};
+use vh_model::{Explanation, Report, Section, Snapshot};
 
-use super::{Lookup, Out, confidence_ko, finding_kind_ko, scope_ko};
+use super::{Lookup, Out, confidence_ko, finding_kind_ko, scope_ko, section};
 use crate::color::Color;
 use crate::fmt;
 use crate::target::Target;
@@ -136,6 +136,21 @@ fn one(o: &mut Out, lk: &Lookup<'_>, q: Target, e: &Explanation) {
                 f.title_ko
             ));
         }
+    }
+    if let Some(f) = e
+        .finding_ids
+        .iter()
+        .filter_map(|id| lk.finding(id))
+        .filter(|f| f.section != Section::Info && f.targets.contains(&e.target))
+        .min_by_key(|f| section::rank(f.section))
+    {
+        let (_, long) = section::evidence_for(f, lk.classified(e.target), lk.s.taken_at_unix_ms);
+        let text = if long.is_empty() {
+            section::name_ko(f.section).to_string()
+        } else {
+            format!("{} — {long}", section::name_ko(f.section))
+        };
+        o.wrap("구역: ", "      ", &text);
     }
     if !e.summary_ko.is_empty() {
         o.wrap("요약: ", "      ", &e.summary_ko);

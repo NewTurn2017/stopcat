@@ -1,48 +1,17 @@
 //! `vh` 상태 화면.
 
-use vh_model::{Confidence, Finding, FindingKind, HealthLevel, Kind, Report, Snapshot, Suggestion};
+use vh_model::{Finding, FindingKind, HealthLevel, Report, Section, Snapshot};
 
-use super::{Lookup, Out};
+use super::{Lookup, Out, section};
 use crate::color::Color;
 use crate::fmt::{self, WIDTH};
 
-const MAX_LINES_PER_BUCKET: usize = 3;
+const MAX_LINES_PER_SECTION: usize = 3;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Bucket {
-    Watch,
-    Orphan,
-    Leftover,
+enum Bucket {
     Exposed,
     Conflict,
-}
-
-pub(crate) fn bucket(f: &Finding, target_kind: Option<Kind>) -> Option<Bucket> {
-    use FindingKind::*;
-    let leftover_kind = matches!(
-        target_kind,
-        Some(Kind::Emulator | Kind::TestTool | Kind::HeadlessBrowser)
-    );
-    match f.kind {
-        HeavyAgentSession | HeavyProcess | HighCpu | LimitNearing => Some(Bucket::Watch),
-        MemoryPressure => None,
-        Orphan | LogicalOrphan if leftover_kind => Some(Bucket::Leftover),
-        Orphan | LogicalOrphan => Some(Bucket::Orphan),
-        HeadlessBrowserLeftover | Duplicate | Stopped | Zombie => Some(Bucket::Leftover),
-        ExposedListener => Some(Bucket::Exposed),
-        KnownPortConflict => Some(Bucket::Conflict),
-    }
-}
-
-fn hint(f: &Finding) -> &'static str {
-    if f.title_ko.contains('→') {
-        return "";
-    }
-    match f.suggestion {
-        Suggestion::HandoffThenRestart => " → 핸드오프 후 재시작 권장",
-        Suggestion::RestartParent { .. } => " → 부모 앱을 다시 시작해야 정리돼요",
-        _ => "",
-    }
 }
 
 /// `"{tag}  a · b ×2 · c"`를 80칸 안에 맞춘다. 짧은 이름이 같은 발견은 "×N"으로 묶고,
@@ -95,6 +64,29 @@ fn joined(o: &mut Out, tag: &str, c: Color, items: &[&Finding]) {
     );
 }
 
+pub const FOOTER_NOTHING_OK: &str = "지금 정리할 것이 없어요. 맥 상태가 좋아요.";
+pub const FOOTER_NOTHING: &str = "지금 vh가 정리할 것은 없어요.";
+
+fn section_line(lk: &Lookup<'_>, f: &Finding) -> String {
+    let c = f.targets.first().and_then(|t| lk.classified(*t));
+    let label = match c.filter(|c| !c.label_ko.is_empty()) {
+        Some(c) if f.targets.len() == 1 => c.label_ko.clone(),
+        _ if f.short_ko.is_empty() => f.title_ko.clone(),
+        _ => f.short_ko.clone(),
+    };
+    let size = if f.reclaim_bytes > 0 {
+        format!(" {}", fmt::bytes(f.reclaim_bytes))
+    } else {
+        String::new()
+    };
+    let (short, _) = section::evidence_for(f, c, lk.s.taken_at_unix_ms);
+    match f.section {
+        Section::Working => format!("{label} — {short} · 건드리지 않음"),
+        _ if short.is_empty() => format!("{label}{size}"),
+        _ => format!("{label}{size} — {short}"),
+    }
+}
+
 pub fn render(s: &Snapshot, r: &Report, color: bool) -> String {
     let lk = Lookup::new(s, r);
     let mut o = Out::new(color);
@@ -109,36 +101,43 @@ pub fn render(s: &Snapshot, r: &Report, color: bool) -> String {
             o.wrap("  ", "  ", reason);
         }
     }
-
-    let mut by: [Vec<&Finding>; 5] = Default::default();
-    for f in &r.findings {
-        let kind = f
-            .targets
-            .first()
-            .and_then(|t| lk.classified(*t))
-            .map(|c| c.kind);
-        let Some(b) = bucket(f, kind) else { continue };
-        let needs_confidence = matches!(b, Bucket::Orphan | Bucket::Leftover);
-        if needs_confidence && !f.confidence.meets(Confidence::Likely) {
-            continue;
-        }
-        by[b as usize].push(f);
-    }
-
-    let mut hidden = 0usize;
-    for (b, tag) in [(Bucket::Watch, "주의"), (Bucket::Orphan, "고아")] {
-        let list = &by[b as usize];
-        for f in list.iter().take(MAX_LINES_PER_BUCKET) {
-            o.tagged(tag, Color::Yellow, &format!("{}{}", f.title_ko, hint(f)));
-        }
-        hidden += list.len().saturating_sub(MAX_LINES_PER_BUCKET);
-    }
-    joined(
-        &mut o,
-        "잔재",
-        Color::Yellow,
-        &by[Bucket::Leftover as usize],
+    o.line(
+        &section::reclaim_text(&r.totals).unwrap_or_else(|| section::RECLAIM_NOTHING.to_string()),
     );
+
+    let mut shown_any = false;
+    for sect in section::ORDER {
+        let list: Vec<&Finding> = r
+            .findings
+            .iter()
+            .filter(|f| f.section == sect)
+            .filter(|f| sect != Section::Info || f.kind == FindingKind::LimitNearing)
+            .collect();
+        let tag = section::plain_tag(sect);
+        let c = match sect {
+            Section::Unneeded | Section::Check => Color::Yellow,
+            _ => Color::Bold,
+        };
+        for f in list.iter().take(MAX_LINES_PER_SECTION) {
+            o.tagged(tag, c, &section_line(&lk, f));
+        }
+        if list.len() > MAX_LINES_PER_SECTION {
+            o.line(&format!(
+                "  … 외 {}건(전체: vh --json)",
+                list.len() - MAX_LINES_PER_SECTION
+            ));
+        }
+        shown_any |= !list.is_empty();
+    }
+
+    let mut by: [Vec<&Finding>; 2] = Default::default();
+    for f in &r.findings {
+        match f.kind {
+            FindingKind::ExposedListener => by[Bucket::Exposed as usize].push(f),
+            FindingKind::KnownPortConflict => by[Bucket::Conflict as usize].push(f),
+            _ => {}
+        }
+    }
     joined(&mut o, "노출", Color::Red, &by[Bucket::Exposed as usize]);
     joined(
         &mut o,
@@ -146,31 +145,18 @@ pub fn render(s: &Snapshot, r: &Report, color: bool) -> String {
         Color::Yellow,
         &by[Bucket::Conflict as usize],
     );
-    if hidden > 0 {
-        o.line(&format!(
-            "  … 외 {hidden}건은 vh fix 미리보기에서 볼 수 있어요"
-        ));
-    }
 
-    let shown_any = by.iter().any(|v| !v.is_empty());
-    let total = r.totals.reclaimable_confirmed_bytes + r.totals.reclaimable_likely_bytes;
-    if total > 0 {
+    if r.totals.unneeded_bytes > 0 {
         o.line(&format!(
-            "→ vh fix 로 최대 약 {} 회수 (미리보기 → 확인)",
-            fmt::bytes(total)
+            "→ vh fix 로 '필요 없음' 약 {} 정리 (미리보기 → 확인)",
+            fmt::bytes(r.totals.unneeded_bytes)
         ));
     } else if !shown_any {
         o.line(if r.health.level == HealthLevel::Ok {
-            "지금 정리할 것이 없어요. 맥 상태가 좋아요."
+            FOOTER_NOTHING_OK
         } else {
-            "지금 vh가 정리할 것은 없어요."
+            FOOTER_NOTHING
         });
-    }
-    let heavy_agent = by[Bucket::Watch as usize]
-        .iter()
-        .any(|f| f.kind == FindingKind::HeavyAgentSession);
-    if r.health.level == HealthLevel::Critical && heavy_agent {
-        o.line("  AI 에이전트 세션은 vh가 끄지 않아요. 대화를 저장한 뒤 직접 다시 켜세요.");
     }
     let unread = s
         .collection_errors

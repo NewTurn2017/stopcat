@@ -5,16 +5,16 @@ use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use vh_act::{Policy, Selection};
+use vh_act::{PlanOrigin, Policy, PriorityTarget, Selection};
 use vh_model::{
     ActionPlan, AutoLevel, Classified, Confidence, Finding, FindingKind, GuardEvent,
-    GuardEventKind, GuardPolicy, GuardStatus, Kind, ProcRef, Report, Snapshot, Step, Suggestion,
-    VhConfig,
+    GuardEventKind, GuardPolicy, GuardStatus, Kind, ProcRef, Report, Section, Snapshot, Step,
+    Suggestion, VhConfig,
 };
 
 use super::link::{Cmd, ManualResult, Update};
 use crate::fmt;
-use crate::render::status::{Bucket, bucket};
+use crate::render::section::{self as sec, UsageView};
 
 use crate::render::{Lookup, action, confidence_ko, scope_ko, why};
 use crate::target::Target;
@@ -66,6 +66,9 @@ pub enum Mode {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Dialog {
     Preview {
+        title: &'static str,
+        /// `c`(추천 전부)로 만든 계획인지. 아니면 직접 지목.
+        bulk: bool,
         plan: ActionPlan,
         lines: Vec<String>,
     },
@@ -104,63 +107,92 @@ pub enum Effect {
     ForceQuit,
 }
 
-/// 목록 한 줄에서 지킴이가 그 대상을 어떻게 다루는지.
+/// 목록 한 줄의 지킴이 칸: 지킴이가 그 대상을 어떻게 다루는지.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mark {
+    /// 불안정할 때만 생기는 자동 예정(연속 확인 중).
     AutoPending(u32, u32),
-    DemotePending(u32, u32),
-    Demoted,
     CircuitHold,
+    /// 평소엔 보고만, 불안정해지면 지킴이 자동 대상.
+    StandbyAuto,
+    Recommend,
+    Demoted,
+    Check,
+    Working,
     Manual,
-    NotifyOnly,
-    Never(&'static str),
+    RestartApp,
+    Info,
 }
+
+pub const MARK_RECOMMEND: &str = "정리 추천";
+pub const MARK_STANDBY_AUTO: &str = "불안정 시 자동";
+pub const MARK_CHECK: &str = "확인 필요";
+pub const MARK_WORKING: &str = "건드리지 않음";
+pub const MARK_MANUAL: &str = "직접 하면 확보";
+pub const MARK_RESTART_APP: &str = "앱 재시작 필요";
+pub const MARK_DEMOTED: &str = "우선순위 낮춤";
+pub const MARK_CIRCUIT_HOLD: &str = "차단기: 보고만";
 
 impl Mark {
     fn rank(self) -> u8 {
         match self {
             Mark::AutoPending(..) => 0,
-            Mark::DemotePending(..) => 1,
-            Mark::Demoted => 2,
-            Mark::CircuitHold => 3,
-            Mark::Manual => 4,
-            Mark::NotifyOnly => 5,
-            Mark::Never(_) => 6,
+            Mark::CircuitHold => 1,
+            Mark::StandbyAuto => 2,
+            Mark::Recommend => 3,
+            Mark::Demoted => 4,
+            Mark::Check => 5,
+            Mark::Working => 6,
+            Mark::Manual => 7,
+            Mark::RestartApp => 8,
+            Mark::Info => 9,
         }
     }
 
     pub fn text(self) -> String {
         match self {
             Mark::AutoPending(s, n) => format!("자동 예정 {s}/{n}"),
-            Mark::DemotePending(s, n) => format!("낮춤 예정 {s}/{n}"),
-            Mark::Demoted => "우선순위 낮춤".to_string(),
-            Mark::CircuitHold => "차단기: 알림만".to_string(),
-            Mark::Manual => "직접 정리".to_string(),
-            Mark::NotifyOnly => "알림만".to_string(),
-            Mark::Never(s) => s.to_string(),
+            Mark::CircuitHold => MARK_CIRCUIT_HOLD.to_string(),
+            Mark::StandbyAuto => MARK_STANDBY_AUTO.to_string(),
+            Mark::Recommend => MARK_RECOMMEND.to_string(),
+            Mark::Demoted => MARK_DEMOTED.to_string(),
+            Mark::Check => MARK_CHECK.to_string(),
+            Mark::Working => MARK_WORKING.to_string(),
+            Mark::Manual => MARK_MANUAL.to_string(),
+            Mark::RestartApp => MARK_RESTART_APP.to_string(),
+            Mark::Info => String::new(),
         }
     }
 
     pub fn explain(self) -> String {
         match self {
             Mark::AutoPending(s, n) => {
-                format!("{n}번 연속 확인되면 자동으로 정리해요(지금 {s}/{n}).")
+                format!("맥이 불안정해 {n}번 연속 확인되면 자동으로 정리해요(지금 {s}/{n}).")
             }
-            Mark::DemotePending(s, n) => format!(
-                "CPU 폭주가 계속되면 끄지 않고 우선순위만 낮춰요(지금 {s}/{n}). 화면을 닫으면 되돌려요."
-            ),
-            Mark::Demoted => "우선순위를 낮춰 두었어요. u 를 누르면 되돌려요.".to_string(),
             Mark::CircuitHold => {
-                "차단기가 열려 자동 종료를 멈췄어요. r 을 누르면 다시 켜져요.".to_string()
+                "차단기가 열려 자동 정리를 멈췄어요. r 을 누르면 다시 켜져요.".to_string()
             }
-            Mark::Manual => {
-                "자동 대상이 아니에요. 직접 끄려면 스페이스로 고른 뒤 Enter.".to_string()
+            Mark::StandbyAuto => {
+                "평소에는 보고만 해요. 맥이 불안정해지면 자동으로 정리해요.".to_string()
             }
-            Mark::NotifyOnly => {
-                "일부러 띄웠을 수 있어 자동으로 끄지 않고 알림만 해요. 직접 끄려면 스페이스 → Enter."
+            Mark::Recommend => {
+                "필요 없어 보여요. c 로 추천 전부, 또는 스페이스 → Enter 로 정리해요.".to_string()
+            }
+            Mark::Demoted => {
+                "직접 낮춘 우선순위예요. u 로 되돌리고, 화면을 닫으면 자동으로 되돌려요."
                     .to_string()
             }
-            Mark::Never(_) => "vh가 끄지 않는 대상이에요. w 로 누가 띄웠는지 볼 수 있어요.".to_string(),
+            Mark::Check => {
+                "쓰고 있는지 확실하지 않아 보고만 해요. 자동으로 정리하지 않아요.".to_string()
+            }
+            Mark::Working => {
+                "지금 쓰고 있어요. 어떤 수준에서도 끄지도, 느리게 하지도 않아요.".to_string()
+            }
+            Mark::Manual => "vh가 끄지 않아요. 직접 하면 확보할 수 있어요.".to_string(),
+            Mark::RestartApp => {
+                "이미 끝난 프로세스예요. 띄운 앱을 다시 시작해야 사라져요.".to_string()
+            }
+            Mark::Info => "알아 두면 좋은 정보예요. 정리 대상이 아니에요.".to_string(),
         }
     }
 }
@@ -168,7 +200,7 @@ impl Mark {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Row {
     pub finding_id: String,
-    pub tag: &'static str,
+    pub section: Section,
     pub label: String,
     pub size: Option<u64>,
     pub confidence: Option<Confidence>,
@@ -179,8 +211,41 @@ pub struct Row {
     pub started_unix_ms: Option<u64>,
     /// 프로젝트 폴더 이름.
     pub project: Option<String>,
-    /// (이름, 내용) — 자세히 칸의 '무엇'·'왜'. '대상'·'지킴이'는 그릴 때 붙인다.
-    pub detail: Vec<(&'static str, String)>,
+    pub kind: Option<Kind>,
+    /// 근거 글은 그릴 때 이 값으로 만든다(갱신마다 문자열을 만들지 않는다).
+    pub usage: Option<UsageView>,
+    /// '직접 하면 확보' 줄의 짧은 방법.
+    pub hint: &'static str,
+}
+
+impl Row {
+    /// 목록 근거 칸(manual은 짧은 방법, info는 빈 칸).
+    pub fn evidence(&self, now_unix_ms: u64) -> String {
+        match self.section {
+            Section::Info => String::new(),
+            Section::Manual => self.hint.to_string(),
+            _ => self
+                .usage
+                .map(|u| sec::evidence_short(&u, self.kind, self.age(now_unix_ms)))
+                .unwrap_or_default(),
+        }
+    }
+
+    /// 자세히·미리보기 근거.
+    pub fn evidence_long(&self, now_unix_ms: u64) -> String {
+        match self.section {
+            Section::Info => String::new(),
+            _ => self
+                .usage
+                .map(|u| sec::evidence_long(&u, self.kind, self.age(now_unix_ms)))
+                .unwrap_or_default(),
+        }
+    }
+
+    fn age(&self, now_unix_ms: u64) -> Option<u64> {
+        self.target
+            .map(|t| now_unix_ms.saturating_sub(t.start_time_unix_ms))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -211,6 +276,7 @@ pub struct TargetInfo {
     pub label: String,
     pub project: Option<String>,
     pub port: Option<u16>,
+    pub usage: Option<UsageView>,
 }
 
 /// 이번 화면 세션에서 지킴이가 한 일 합계(기록 탭 첫 줄·끝낼 때 요약).
@@ -238,7 +304,7 @@ pub struct Model {
     pub config: VhConfig,
     /// `VH_GUARD_LEVEL`이 있으면 그 해석 결과(화면에서 바꿀 수 없음).
     pub env_level: Option<AutoLevel>,
-    /// `VH_GUARD_LEVEL` 값이 이상해 알림만으로 내려갔을 때의 경고.
+    /// `VH_GUARD_LEVEL` 값이 이상해 보고만으로 내려갔을 때의 경고.
     pub env_warning: Option<String>,
     pub e2e_lock: bool,
     pub no_color: bool,
@@ -256,8 +322,8 @@ pub struct Model {
 
 pub fn level_ko(l: AutoLevel) -> &'static str {
     match l {
-        AutoLevel::NotifyOnly => "알림만",
-        AutoLevel::Safe => "안전 자동",
+        AutoLevel::NotifyOnly => "보고만",
+        AutoLevel::Safe => "안정화 자동",
         AutoLevel::Aggressive => "적극 자동",
     }
 }
@@ -269,10 +335,32 @@ const LEVELS: [AutoLevel; 3] = [
 ];
 
 pub const NOT_ACTIONABLE: &str =
-    "AI 세션·좀비 같은 줄은 vh가 끄지 않아요. w 로 자세히 볼 수 있어요.";
-pub const CIRCUIT_CLOSED: &str = "차단기는 닫혀 있어요. 자동 종료가 켜져 있어요.";
-pub const NOT_DEMOTED: &str = "지킴이가 우선순위를 낮춘 대상이 아니에요.";
+    "AI 세션·좀비·가상 머신 같은 줄은 vh가 끄지 않아요. w 로 방법을 볼 수 있어요.";
+pub const CIRCUIT_CLOSED: &str = "차단기는 닫혀 있어요. 자동 정리가 켜져 있어요.";
+pub const NOT_DEMOTED: &str = "직접 낮춘 대상이 아니에요.";
 pub const UNDO_SENT: &str = "우선순위를 되돌리라고 지킴이에게 보냈어요.";
+pub const C_NOTHING: &str = "지금 '필요 없음'으로 추천할 것이 없어요.";
+pub const PICK_WORKING: &str = "일하는 중인 항목이에요. 정리하면 하던 일이 끊길 수 있어요.";
+pub const PICK_CHECK: &str = "확인 필요 항목이에요. 쓰고 있는지 먼저 확인해 주세요.";
+pub const D_NO_TARGET: &str = "우선순위를 낮출 프로세스가 없는 줄이에요.";
+
+pub const C_TITLE: &str = "추천 전부 정리";
+pub const C_BASIS: &str = "기준: '필요 없음'만 · 확인 필요·일하는 중은 빼요 · 보호 규칙 그대로";
+pub const PICK_BASIS: &str = "기준: 직접 고른 것만 · 보호 규칙은 그대로";
+pub const WARN_WORKING: &str = "주의: 일하는 중 — 지금 쓰고 있어요. 정리하면 하던 일이 끊겨요";
+pub const WARN_CHECK: &str = "주의: 확인 필요 — 쓰고 있는지 확실하지 않아요. 먼저 확인해 주세요";
+pub const CONFIRM: &str = "y 정리하기     n 취소";
+pub const CONFIRM_WITH_WARNING: &str = "y 그래도 정리하기     n 취소";
+pub const DEMOTE_TITLE: &str = "우선순위 낮추기";
+pub const DEMOTE_BODY: [&str; 2] = [
+    "끄지 않고 CPU 우선순위만 낮춰요. 하던 일은 계속돼요(느려질 수 있어요).",
+    "u 로 되돌리고, 화면을 닫으면 자동으로 되돌려요.",
+];
+pub const DEMOTE_CONFIRM: &str = "y 낮추기     n 취소";
+pub const DEMOTE_NOTHING: &str = "낮출 수 있는 것이 없어요";
+pub const CLOSE_ANY: &str = "아무 키나 누르면 닫혀요";
+pub const PREVIEW_TITLE: &str = "정리할까요?";
+pub const PREVIEW_EMPTY_TITLE: &str = "정리 미리보기";
 
 impl Model {
     pub fn new(config: Option<VhConfig>, env_raw: Option<&str>, e2e_lock: bool) -> Model {
@@ -283,7 +371,7 @@ impl Model {
                 None => (
                     Some(AutoLevel::NotifyOnly),
                     Some(format!(
-                        "VH_GUARD_LEVEL='{raw}' 을 알아볼 수 없어 알림만으로 실행해요"
+                        "VH_GUARD_LEVEL='{raw}' 을 알아볼 수 없어 보고만으로 실행해요"
                     )),
                 ),
             },
@@ -401,14 +489,17 @@ impl Model {
             Arc::ptr_eq(&l.report, &u.report) && Arc::ptr_eq(&l.snapshot, &u.snapshot)
         });
         let same_report = same_arc || {
-            let fresh = target_infos(&u.snapshot, &u.report);
-            let same = self.latest.as_ref().is_some_and(|l| {
-                l.report.findings == u.report.findings
-                    && l.report.listeners == u.report.listeners
-                    && self.targets == fresh
-            });
-            self.targets = fresh;
-            same
+            let views = target_views(&u.snapshot, &u.report);
+            let same_targets = views.len() == self.targets.len()
+                && views.iter().zip(&self.targets).all(|(v, t)| v.same_as(t));
+            if !same_targets {
+                self.targets = views.iter().map(TargetView::owned).collect();
+            }
+            same_targets
+                && self.latest.as_ref().is_some_and(|l| {
+                    l.report.findings == u.report.findings
+                        && l.report.listeners == u.report.listeners
+                })
         };
         let same_marks = self
             .latest
@@ -540,6 +631,14 @@ impl Model {
                 self.preview();
                 Vec::new()
             }
+            KeyCode::Char('c') if self.tab == Tab::Findings => {
+                self.preview_bulk();
+                Vec::new()
+            }
+            KeyCode::Char('d') if self.tab == Tab::Findings => {
+                self.preview_demote();
+                Vec::new()
+            }
             KeyCode::Enter if self.tab == Tab::Settings => self.settings_enter(),
             KeyCode::Char('a') => {
                 self.open_level();
@@ -594,8 +693,14 @@ impl Model {
             return;
         }
         let id = row.finding_id.clone();
+        let warn = match row.section {
+            Section::Working => Some(PICK_WORKING),
+            Section::Check => Some(PICK_CHECK),
+            _ => None,
+        };
         if !self.selected.remove(&id) {
             self.selected.insert(id);
+            self.flash = warn.map(str::to_string);
         }
     }
 
@@ -617,12 +722,104 @@ impl Model {
         };
         let sel = selection_for(&l.report, &ids);
         let policy = Policy {
+            origin: PlanOrigin::Pointed,
             allow_demote: true,
             ..Policy::default()
         };
         let plan = vh_act::plan(&l.snapshot, &l.report, &sel, &policy);
-        let lines = preview_lines(l, &plan, &sel.pids);
-        self.dialog = Some(Dialog::Preview { plan, lines });
+        let lines = preview_lines(l, &plan, &sel.pids, false);
+        let title = if plan.items.is_empty() {
+            PREVIEW_EMPTY_TITLE
+        } else {
+            PREVIEW_TITLE
+        };
+        self.dialog = Some(Dialog::Preview {
+            title,
+            bulk: false,
+            plan,
+            lines,
+        });
+    }
+
+    /// c 키: '필요 없음' 구역의 Terminate 발견만 모아 미리보기. 고른 것은 쓰지도 바꾸지도 않는다.
+    /// pids를 비워 Review가 실행 항목이 되지 않게 하고, 0건이면 vh-act에 빈 목록(=전체)을 넘기지 않는다.
+    fn preview_bulk(&mut self) {
+        let Some(l) = &self.latest else { return };
+        let ids = sec::bulk_ids(&l.report.findings);
+        if ids.is_empty() {
+            self.flash = Some(C_NOTHING.to_string());
+            return;
+        }
+        let sel = Selection {
+            finding_ids: ids,
+            pids: Vec::new(),
+            min_confidence: Confidence::Likely,
+            direct: Vec::new(),
+        };
+        let policy = Policy {
+            origin: PlanOrigin::Bulk,
+            ..Policy::default()
+        };
+        let plan = vh_act::plan(&l.snapshot, &l.report, &sel, &policy);
+        let lines = preview_lines(l, &plan, &[], true);
+        self.dialog = Some(Dialog::Preview {
+            title: C_TITLE,
+            bulk: true,
+            plan,
+            lines,
+        });
+    }
+
+    /// d 키: 커서 줄 대상의 우선순위 직접 낮추기 미리보기(끄지 않음).
+    fn preview_demote(&mut self) {
+        let Some(l) = &self.latest else { return };
+        let Some(target) = self.cursor_row().and_then(|r| r.target) else {
+            self.flash = Some(D_NO_TARGET.to_string());
+            return;
+        };
+        let lk = Lookup::new(&l.snapshot, &l.report);
+        let label = lk.label(target);
+        let pt = PriorityTarget {
+            target,
+            step: Step::Demote,
+            reason_ko: label.clone(),
+        };
+        let policy = Policy {
+            origin: PlanOrigin::Pointed,
+            allow_demote: true,
+            ..Policy::default()
+        };
+        let plan = vh_act::plan_priority(&l.snapshot, Some(&l.report), &[pt], &policy);
+        let w = DIALOG_INNER;
+        let mut lines = Vec::new();
+        if plan.items.is_empty() {
+            lines.push(DEMOTE_NOTHING.to_string());
+        } else {
+            lines.push(fmt::truncate(
+                &format!("우선순위 낮추기 미리보기 — {label}"),
+                w,
+            ));
+            lines.extend(DEMOTE_BODY.iter().map(|s| s.to_string()));
+        }
+        for rf in &plan.refused {
+            lines.push(fmt::truncate(
+                &format!("낮추지 않아요: {}", lk.label(rf.target)),
+                w,
+            ));
+            lines.extend(fmt::wrap(&rf.reason_ko, w, "  ", "  "));
+        }
+        lines.push(String::new());
+        lines.push(if plan.items.is_empty() {
+            CLOSE_ANY.to_string()
+        } else {
+            DEMOTE_CONFIRM.to_string()
+        });
+        self.dialog = Some(Dialog::Preview {
+            title: DEMOTE_TITLE,
+            bulk: false,
+            plan,
+            lines,
+        });
     }
 
     fn on_dialog_key(&mut self, k: KeyEvent) -> Vec<Effect> {
@@ -630,7 +827,7 @@ impl Model {
             return Vec::new();
         };
         match d {
-            Dialog::Preview { plan, .. } => {
+            Dialog::Preview { plan, bulk, .. } => {
                 if plan.items.is_empty() {
                     self.dialog = None;
                     return Vec::new();
@@ -644,10 +841,16 @@ impl Model {
                         self.next_request += 1;
                         let snapshot = l.snapshot.clone();
                         self.dialog = Some(Dialog::Busy { request_id });
+                        let origin = if bulk {
+                            PlanOrigin::Bulk
+                        } else {
+                            PlanOrigin::Pointed
+                        };
                         vec![Effect::Send(Cmd::RunPlan {
                             request_id,
                             plan,
                             snapshot,
+                            origin,
                         })]
                     }
                     KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
@@ -870,9 +1073,60 @@ pub fn selection_for(r: &Report, ids: &[String]) -> Selection {
     }
 }
 
+/// 발견 대상 하나의 빌린 정보(비교용, 문자열을 만들지 않는다).
+struct TargetView<'a> {
+    target: ProcRef,
+    cls: Option<&'a Classified>,
+    name: Option<&'a str>,
+    port: Option<u16>,
+}
+
+impl TargetView<'_> {
+    fn label(&self) -> std::borrow::Cow<'_, str> {
+        match self.cls.filter(|c| !c.label_ko.is_empty()) {
+            Some(c) => c.label_ko.as_str().into(),
+            None => match self.name {
+                Some(n) => n.into(),
+                None => format!("{}번 프로세스", self.target.pid).into(),
+            },
+        }
+    }
+
+    fn project(&self) -> Option<&str> {
+        self.cls.and_then(|c| c.project.as_deref())
+    }
+
+    fn same_as(&self, t: &TargetInfo) -> bool {
+        t.target == self.target
+            && t.kind == self.cls.map(|c| c.kind)
+            && t.port == self.port
+            && t.usage == self.cls.map(|c| UsageView::of(&c.usage))
+            && *t.label == *self.label()
+            && t.project.as_deref() == self.project().map(project_name_ref)
+    }
+
+    fn owned(&self) -> TargetInfo {
+        TargetInfo {
+            target: self.target,
+            kind: self.cls.map(|c| c.kind),
+            label: self.label().into_owned(),
+            project: self.project().map(project_name),
+            port: self.port,
+            usage: self.cls.map(|c| UsageView::of(&c.usage)),
+        }
+    }
+}
+
+fn project_name_ref(path: &str) -> &str {
+    std::path::Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(path)
+}
+
 /// 발견들의 첫 대상만 이름·종류·프로젝트·가장 작은 대기 포트를 찾는다. 전체 프로세스로 색인(HashMap)을
 /// 만들지 않고 보고서·스냅샷을 한 번씩 훑어 발견 수만큼만 담는다(갱신마다 프로세스 수에 비례한 할당을 피함).
-pub fn target_infos(s: &Snapshot, r: &Report) -> Vec<TargetInfo> {
+fn target_views<'a>(s: &'a Snapshot, r: &'a Report) -> Vec<TargetView<'a>> {
     let mut refs: Vec<ProcRef> = r
         .findings
         .iter()
@@ -880,23 +1134,29 @@ pub fn target_infos(s: &Snapshot, r: &Report) -> Vec<TargetInfo> {
         .collect();
     refs.sort();
     refs.dedup();
-    let mut cls: Vec<Option<&Classified>> = vec![None; refs.len()];
+    let mut out: Vec<TargetView<'a>> = refs
+        .iter()
+        .map(|t| TargetView {
+            target: *t,
+            cls: None,
+            name: None,
+            port: None,
+        })
+        .collect();
     for c in &r.classified {
         if let Ok(i) = refs.binary_search(&c.target) {
-            cls[i] = Some(c);
+            out[i].cls = Some(c);
         }
     }
-    let mut names: Vec<Option<&str>> = vec![None; refs.len()];
     for p in &s.processes {
         let t = ProcRef {
             pid: p.pid,
             start_time_unix_ms: p.start_time_unix_ms,
         };
         if let Ok(i) = refs.binary_search(&t) {
-            names[i] = Some(p.name.as_str());
+            out[i].name = Some(p.name.as_str());
         }
     }
-    let mut ports: Vec<Option<u16>> = vec![None; refs.len()];
     for v in &r.listeners {
         let t = ProcRef {
             pid: v.listener.pid,
@@ -904,33 +1164,19 @@ pub fn target_infos(s: &Snapshot, r: &Report) -> Vec<TargetInfo> {
         };
         if let Ok(i) = refs.binary_search(&t) {
             let port = v.listener.port;
-            ports[i] = Some(ports[i].map_or(port, |p| p.min(port)));
+            out[i].port = Some(out[i].port.map_or(port, |p| p.min(port)));
         }
     }
-    refs.into_iter()
-        .enumerate()
-        .map(|(i, t)| {
-            let c = cls[i];
-            let label = match c.filter(|c| !c.label_ko.is_empty()) {
-                Some(c) => c.label_ko.clone(),
-                None => names[i]
-                    .map(str::to_string)
-                    .unwrap_or_else(|| format!("{}번 프로세스", t.pid)),
-            };
-            TargetInfo {
-                target: t,
-                kind: c.map(|c| c.kind),
-                label,
-                project: c.and_then(|c| c.project.as_deref()).map(project_name),
-                port: ports[i],
-            }
-        })
-        .collect()
+    out
+}
+
+pub fn target_infos(s: &Snapshot, r: &Report) -> Vec<TargetInfo> {
+    target_views(s, r).iter().map(TargetView::owned).collect()
 }
 
 /// 목록 대상 칸 이름. 크기·나이가 붙는 짧은 이름을 쓰던 종류는 분류 이름(+ 대기 포트)만 쓰고
 /// 크기·나이는 각 칸에 둔다. CPU %·개수처럼 다른 칸이 없는 정보를 담은 종류는 그대로.
-fn list_name(f: &Finding, b: Bucket, info: Option<&TargetInfo>) -> String {
+fn list_name(f: &Finding, info: Option<&TargetInfo>) -> String {
     let by_name = f.targets.len() == 1
         && matches!(
             f.kind,
@@ -945,7 +1191,7 @@ fn list_name(f: &Finding, b: Bucket, info: Option<&TargetInfo>) -> String {
             Some(p) => format!("{} :{p}", i.label),
             None => i.label.clone(),
         },
-        _ if b == Bucket::Watch || f.short_ko.is_empty() => f.title_ko.clone(),
+        _ if f.short_ko.is_empty() => f.title_ko.clone(),
         _ => f.short_ko.clone(),
     }
 }
@@ -962,8 +1208,9 @@ fn same_marks(l: &Latest, policy: &GuardPolicy, st: &GuardStatus) -> bool {
     pending_same
         && l.status.circuit_open == st.circuit_open
         && l.status.demoted == st.demoted
+        && l.status.level == st.level
         && l.policy.auto_terminate_kinds == policy.auto_terminate_kinds
-        && l.policy.notify_only_kinds == policy.notify_only_kinds
+        && l.policy.min_confidence == policy.min_confidence
 }
 
 pub fn build_rows(s: &Snapshot, r: &Report, policy: &GuardPolicy, st: &GuardStatus) -> Vec<Row> {
@@ -976,8 +1223,11 @@ fn rows_from(
     policy: &GuardPolicy,
     st: &GuardStatus,
 ) -> Vec<Row> {
-    let mut rows = Vec::new();
+    let mut rows = Vec::with_capacity(r.findings.len());
     for f in &r.findings {
+        if f.section == Section::Info && f.kind != FindingKind::LimitNearing {
+            continue;
+        }
         let target = f.targets.first().copied();
         let info = target.and_then(|t| {
             targets
@@ -986,18 +1236,10 @@ fn rows_from(
                 .map(|i| &targets[i])
         });
         let kind = info.and_then(|i| i.kind);
-        let Some(b) = bucket(f, kind) else { continue };
-        let tag = match b {
-            Bucket::Watch => "주의",
-            Bucket::Orphan => "고아",
-            Bucket::Leftover => "잔재",
-            Bucket::Exposed | Bucket::Conflict => continue,
-        };
-        if matches!(b, Bucket::Orphan | Bucket::Leftover) && !f.confidence.meets(Confidence::Likely)
-        {
-            continue;
-        }
         let actionable = matches!(
+            f.section,
+            Section::Unneeded | Section::Check | Section::Working
+        ) && matches!(
             f.suggestion,
             Suggestion::Terminate { .. }
                 | Suggestion::Demote
@@ -1005,35 +1247,37 @@ fn rows_from(
                 | Suggestion::Review
         );
         let in_kinds = |ks: &[Kind]| kind.is_some_and(|k| ks.contains(&k));
-        let mark = if !actionable {
-            match f.suggestion {
-                Suggestion::RestartParent { .. } => Mark::Never("앱 재시작 필요"),
-                _ => Mark::Never("끄지 않음"),
-            }
-        } else if st.demoted.iter().any(|d| f.targets.contains(&d.target)) {
+        let mark = if st.demoted.iter().any(|d| f.targets.contains(&d.target)) {
             Mark::Demoted
-        } else if let Some(p) = st.pending.iter().find(|p| p.finding_id == f.id) {
-            if p.step == Step::Demote {
-                Mark::DemotePending(p.seen_scans, p.needed_scans)
-            } else {
-                Mark::AutoPending(p.seen_scans, p.needed_scans)
-            }
-        } else if in_kinds(&policy.notify_only_kinds) {
-            Mark::NotifyOnly
-        } else if st.circuit_open && in_kinds(&policy.auto_terminate_kinds) {
-            Mark::CircuitHold
         } else {
-            Mark::Manual
+            match f.section {
+                Section::Unneeded => {
+                    if st.circuit_open && in_kinds(&policy.auto_terminate_kinds) {
+                        Mark::CircuitHold
+                    } else if let Some(p) = st.pending.iter().find(|p| p.finding_id == f.id) {
+                        Mark::AutoPending(p.seen_scans, p.needed_scans)
+                    } else if policy.level != AutoLevel::NotifyOnly
+                        && in_kinds(&policy.auto_terminate_kinds)
+                        && f.confidence.meets(policy.min_confidence)
+                    {
+                        Mark::StandbyAuto
+                    } else {
+                        Mark::Recommend
+                    }
+                }
+                Section::Check => Mark::Check,
+                Section::Working => Mark::Working,
+                Section::Manual => match f.suggestion {
+                    Suggestion::RestartParent { .. } => Mark::RestartApp,
+                    _ => Mark::Manual,
+                },
+                Section::Info => Mark::Info,
+            }
         };
-        let label = list_name(f, b, info);
-        let mut detail: Vec<(&'static str, String)> = vec![("무엇", f.title_ko.clone())];
-        if !f.detail_ko.is_empty() {
-            detail.push(("왜", f.detail_ko.clone()));
-        }
         rows.push(Row {
             finding_id: f.id.clone(),
-            tag,
-            label,
+            section: f.section,
+            label: list_name(f, info),
             size: (f.reclaim_bytes > 0).then_some(f.reclaim_bytes),
             confidence: (f.suggestion != Suggestion::HandoffThenRestart).then_some(f.confidence),
             mark,
@@ -1043,13 +1287,15 @@ fn rows_from(
                 .then(|| target.map(|t| t.start_time_unix_ms))
                 .flatten(),
             project: info.and_then(|i| i.project.clone()),
-            detail,
+            kind,
+            usage: info.and_then(|i| i.usage),
+            hint: sec::manual_hint(f, kind),
         });
     }
     rows.sort_by(|a, b| {
-        a.mark
-            .rank()
-            .cmp(&b.mark.rank())
+        sec::rank(a.section)
+            .cmp(&sec::rank(b.section))
+            .then(a.mark.rank().cmp(&b.mark.rank()))
             .then(b.size.unwrap_or(0).cmp(&a.size.unwrap_or(0)))
             .then(a.finding_id.cmp(&b.finding_id))
     });
@@ -1058,7 +1304,7 @@ fn rows_from(
 
 /// 포트 행. 나이 줄은 그릴 때 붙인다.
 pub fn build_ports(r: &Report) -> Vec<PortRow> {
-    let mut out: Vec<PortRow> = Vec::new();
+    let mut out: Vec<PortRow> = Vec::with_capacity(r.listeners.len());
     for v in &r.listeners {
         let l = &v.listener;
         if out
@@ -1113,31 +1359,73 @@ pub fn build_ports(r: &Report) -> Vec<PortRow> {
     out
 }
 
-fn preview_lines(l: &Latest, plan: &ActionPlan, picked_pids: &[i32]) -> Vec<String> {
+fn preview_lines(l: &Latest, plan: &ActionPlan, picked_pids: &[i32], bulk: bool) -> Vec<String> {
     let lk = Lookup::new(&l.snapshot, &l.report);
     let w = DIALOG_INNER;
+    let now = l.report.taken_at_unix_ms;
     let mut out = Vec::new();
+    let section_of = |id: &str| lk.finding(id).map(|f| f.section);
+    let warned: Vec<_> = plan
+        .items
+        .iter()
+        .filter(|a| {
+            matches!(
+                section_of(&a.finding_id),
+                Some(Section::Working | Section::Check)
+            )
+        })
+        .collect();
+    for (s, text) in [
+        (Section::Working, WARN_WORKING),
+        (Section::Check, WARN_CHECK),
+    ] {
+        let these: Vec<_> = warned
+            .iter()
+            .filter(|a| section_of(&a.finding_id) == Some(s))
+            .collect();
+        if these.is_empty() {
+            continue;
+        }
+        out.push(text.to_string());
+        for a in these {
+            let (_, long) = lk
+                .finding(&a.finding_id)
+                .map(|f| sec::evidence_for(f, lk.classified(a.target), now))
+                .unwrap_or_default();
+            out.push(fmt::truncate(
+                &format!("  {}: {long}", lk.label(a.target)),
+                w,
+            ));
+        }
+    }
     if plan.items.is_empty() {
         out.push("정리할 수 있는 것이 없어요".to_string());
     } else {
         let total: u64 = plan.items.iter().map(|i| i.est_reclaim_bytes).sum();
+        let head = if bulk {
+            "추천 전부 정리 미리보기"
+        } else {
+            "정리 미리보기"
+        };
         out.push(format!(
-            "정리 미리보기 — {}건, 최대 약 {} 회수 예상",
+            "{head} — {}건, 최대 약 {} 회수 예상",
             plan.items.len(),
             fmt::bytes(total)
         ));
-        out.push("기준: 직접 고른 것만 · 보호 규칙은 그대로".to_string());
+        out.push(if bulk { C_BASIS } else { PICK_BASIS }.to_string());
         for (i, a) in plan.items.iter().enumerate() {
-            let conf = lk
-                .finding(&a.finding_id)
-                .map(|f| confidence_ko(f.confidence))
-                .unwrap_or("");
+            let f = lk.finding(&a.finding_id);
+            let col = match f.map(|f| f.section) {
+                Some(Section::Working) => "일하는 중",
+                Some(Section::Check) => "확인 필요",
+                _ => f.map(|f| confidence_ko(f.confidence)).unwrap_or(""),
+            };
             let left = fmt::truncate(
                 &format!("{}. {}", i + 1, action::item_label(&lk, a)),
                 w - 22,
             );
             out.push(format!(
-                "{}{}  {conf}",
+                "{}{}  {col}",
                 fmt::pad(&left, w - 21),
                 fmt::lpad(&fmt::bytes(a.est_reclaim_bytes), 7)
             ));
@@ -1156,9 +1444,11 @@ fn preview_lines(l: &Latest, plan: &ActionPlan, picked_pids: &[i32]) -> Vec<Stri
     }
     out.push(String::new());
     out.push(if plan.items.is_empty() {
-        "아무 키나 누르면 닫혀요".to_string()
+        CLOSE_ANY.to_string()
+    } else if warned.is_empty() {
+        CONFIRM.to_string()
     } else {
-        "y 정리하기     n 취소".to_string()
+        CONFIRM_WITH_WARNING.to_string()
     });
     out
 }
@@ -1188,6 +1478,12 @@ fn result_lines(l: &Latest, m: &ManualResult) -> Vec<String> {
                 action::item_label(&lk, &x.action),
                 action::how(x)
             ),
+            w,
+        ));
+    }
+    for rf in &m.refused {
+        out.push(fmt::truncate(
+            &format!("  건너뜀(지금 쓰고 있음)  {}", lk.label(rf.target)),
             w,
         ));
     }

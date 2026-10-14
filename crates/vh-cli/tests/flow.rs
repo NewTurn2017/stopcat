@@ -5,7 +5,7 @@ mod common;
 use std::collections::BTreeSet;
 
 use common::*;
-use vh_model::{Family, Listener};
+use vh_model::{Confidence, Family, Listener, Section, Suggestion};
 
 fn json(out: &str) -> serde_json::Value {
     serde_json::from_str(out.trim()).expect("JSON")
@@ -53,17 +53,19 @@ fn tty_answer_decides() {
     assert_eq!(ran.code, 0);
     assert_eq!(be.exec_calls.get(), 1);
     assert!(
-        ran.out.contains("정리 결과 — 4건 중 4건 종료"),
+        ran.out.contains("정리 결과 — 3건 중 3건 종료"),
         "{}",
         ran.out
     );
     let sent = be.sent.borrow();
-    for pid in [40001, 51234, 40112, 40200] {
+    for pid in [51234, 40200, 51230] {
         assert!(sent.contains(&(pid, libc::SIGTERM)), "{pid}: {sent:?}");
     }
     assert!(
-        !sent.iter().any(|(p, _)| [2001, 6333, 700].contains(p)),
-        "{sent:?}"
+        !sent
+            .iter()
+            .any(|(p, _)| [2001, 6333, 700, 40001, 40112, 61822, 3000].contains(p)),
+        "확인 필요·일하는 중·직접 하면 확보에는 신호 0: {sent:?}"
     );
     assert!(audit_exists(&be));
 }
@@ -83,7 +85,7 @@ fn yes_runs_confirmed_only() {
 fn preview_default_is_likely() {
     let be = Synth::new();
     let v = json(&run(&be, &["fix", "--json"], false, "").out);
-    assert_eq!(plan_pids(&v), BTreeSet::from([40001, 51234, 40112, 40200]));
+    assert_eq!(plan_pids(&v), BTreeSet::from([51234, 40200, 51230]));
 }
 
 #[test]
@@ -186,4 +188,84 @@ fn kill_refused_agent_session_never_executes() {
         ran.out
     );
     assert_eq!(be.exec_calls.get(), 0);
+}
+
+/// 확인 필요·일하는 중 발견이 (잘못) Terminate·확실이어도 `vh fix` 기본 계획에는 들어가지 않는다.
+#[test]
+fn fix_default_never_plans_check_or_working() {
+    let mut be = Synth::new();
+    for f in &mut be.report.findings {
+        if matches!(f.section, Section::Check | Section::Working) {
+            f.confidence = Confidence::Confirmed;
+            f.suggestion = Suggestion::Terminate {
+                include_descendants: false,
+            };
+        }
+    }
+    for args in [&["fix", "--json"][..], &["fix", "--json", "--yes"][..]] {
+        let v = json(&run(&be, args, false, "").out);
+        let pids = plan_pids(&v);
+        assert!(!pids.is_empty(), "{args:?}");
+        for p in [40001, 40112, 61822, 3000] {
+            assert!(!pids.contains(&p), "{args:?}: {pids:?}");
+        }
+    }
+    let text = run(&be, &["fix"], false, "").out;
+    assert!(
+        text.contains("Android 에뮬레이터 (qemu) — 확인 필요라 뺐어요. 직접: vh fix --only 40001"),
+        "{text}"
+    );
+}
+
+/// '필요 없음'이 없으면 빈 선택(=전체)을 넘기지 않고 nothing_to_do.
+#[test]
+fn fix_default_with_no_unneeded_is_nothing_to_do() {
+    let mut be = Synth::new();
+    for f in &mut be.report.findings {
+        if f.section == Section::Unneeded {
+            f.section = Section::Check;
+        }
+    }
+    let v = json(&run(&be, &["fix", "--json", "--yes"], false, "").out);
+    assert_eq!(v["mode"], "nothing_to_do");
+    assert!(plan_pids(&v).is_empty());
+    assert_eq!(be.exec_calls.get(), 0);
+    let text = run(&be, &["fix"], false, "").out;
+    assert_eq!(text.lines().last(), Some("정리할 것이 없어요."), "{text}");
+    assert!(
+        text.contains("— 확인 필요라 뺐어요. 직접: vh fix --only 51234"),
+        "{text}"
+    );
+}
+
+/// `--only`로 일하는 중·확인 필요를 고르면 정리 대상에 넣되 경고와 근거를 보인다.
+#[test]
+fn fix_only_working_and_check_warn() {
+    let be = Synth::new();
+    let text = run(
+        &be,
+        &["fix", "--only", "3000", "--only", "40112"],
+        false,
+        "",
+    )
+    .out;
+    assert!(
+        text.contains(vh_cli::render::action::ONLY_WARN_WORKING),
+        "{text}"
+    );
+    assert!(
+        text.contains(vh_cli::render::action::ONLY_WARN_CHECK),
+        "{text}"
+    );
+    assert!(text.contains("근거: 주인 있음 · CPU 103%"), "{text}");
+    let v = json(
+        &run(
+            &be,
+            &["fix", "--json", "--only", "3000", "--only", "40112"],
+            false,
+            "",
+        )
+        .out,
+    );
+    assert_eq!(plan_pids(&v), BTreeSet::from([3000, 40112]));
 }
