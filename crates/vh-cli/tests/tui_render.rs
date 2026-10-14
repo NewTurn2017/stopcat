@@ -95,24 +95,24 @@ fn list_names_have_no_size_or_age() {
             }
         }
         for l in both(&mut m) {
-            assert!(l.iter().any(|x| x.contains("크기  나이  근거")));
+            assert!(l.iter().any(|x| x.contains("크기  나이   근거")));
         }
     }
 }
 
 /// 평소 보고 화면 목록(열 머리 + 구역 머리 4 + 행 7 + 아래 표시), 80칸.
 const LIST_80: [&str; 13] = [
-    "      대상                    크기  나이  근거                    지킴이",
+    "      대상                   크기  나이   근거                    지킴이",
     "필요 없음 3 · 정리하면 약 1.5GB · c 로 전부 정리",
-    "> [ ] codex app-server       1.0GB  3일   주인 끝남·CPU 0·연결 0  불안정 시 자동",
-    "  [ ] headless Chrome (Chr…  380MB  7시간 주인 끝남·CPU 0·연결 0  정리 추천",
-    "  [ ] npm exec                84MB  3일   주인 끝남·CPU 0·연결 0  정리 추천",
+    "> [ ] codex app-server      1.0GB  3일    주인 끝남·CPU 0·연결 0  불안정 시 자동",
+    "  [ ] headless Chrome (Ch…  380MB  7시간  주인 끝남·CPU 0·연결 0  정리 추천",
+    "  [ ] npm exec               84MB  3일    주인 끝남·CPU 0·연결 0  정리 추천",
     "확인 필요 3 · 쓰고 있는지 확실하지 않아 보고만 · 확인하면 약 8.0GB",
-    "  [ ] Android 에뮬레이터 (…  7.5GB  3일   주인 끝남·CPU 3%·연결 6 확인 필요",
-    "  [ ] appium (앱 테스트) :…  412MB  2일   주인 있음·안 쓰는 듯    확인 필요",
-    "  [ ] 테스트 서버 (node) :…   96MB  1일   주인 끝남·CPU 0·연결 …  확인 필요",
+    "  [ ] Android 에뮬레이터 …  7.5GB  3일    주인 끝남·CPU 3%·연결 6 확인 필요",
+    "  [ ] appium (앱 테스트) …  412MB  2일    주인 있음·안 쓰는 듯    확인 필요",
+    "  [ ] 테스트 서버 (node) …   96MB  1일    주인 끝남·CPU 0·연결 …  확인 필요",
     "일하는 중 1 · 건드리지 않음",
-    "  [ ] Next.js 개발 서버             2시간 주인 있음·CPU 103%      건드리지 않음",
+    "  [ ] Next.js 개발 서버            2시간  주인 있음·CPU 103%      건드리지 않음",
     "직접 하면 확보 2 · 약 22GB · 방법은 w",
     "  ↓ 2줄 더 있어요(↓ 로 내려 보기)",
 ];
@@ -343,6 +343,86 @@ fn removed_strings_never_render() {
         ] {
             assert!(!has(l, bad), "'{bad}' 이 화면에 남음: {l:#?}");
         }
+    }
+}
+
+/// 나이 칸이 꽉 차도('19시간') 근거 칸과 붙지 않는다(PM-W4-2).
+#[test]
+fn full_age_keeps_one_space_before_evidence() {
+    let mut m = calm_model();
+    let mut u = update_from(report(&snapshot()), AutoLevel::Safe, |_, _| {});
+    let mut later = (*u.snapshot).clone();
+    later.taken_at_unix_ms += 12 * HOUR;
+    u.snapshot = std::sync::Arc::new(later);
+    m.apply(u);
+    for (w, h) in SIZES {
+        let l = render(&mut m, w, h);
+        check_widths(&l, w as usize);
+        assert!(has(&l, "19시간 주인 끝남·CPU 0·연결 0"), "{l:#?}");
+        assert!(has(&l, "14시간 주인 있음·CPU 103%"), "{l:#?}");
+        for x in &l {
+            for glued in ["시간주", "일주", "분주", "시간앱", "일앱"] {
+                assert!(!x.contains(glued), "나이·근거가 붙음: {x}");
+            }
+        }
+    }
+}
+
+/// 지킴이 첫 확인(측정 간격 없음 → CPU·디스크 모름) 보고서.
+fn first_scan_update(rep: Report) -> vh_cli::tui::link::Update {
+    let mut u = update_from(rep, AutoLevel::Safe, |_, _| {});
+    let mut s = (*u.snapshot).clone();
+    s.cpu_sample_interval_ms = None;
+    for p in &mut s.processes {
+        p.cpu_pct = None;
+    }
+    u.snapshot = std::sync::Arc::new(s);
+    u
+}
+
+/// PM-W4-1: 첫 보고에는 안내 한 줄을 보이고 '필요 없음 0'·'맥 상태가 좋아요' 같은 단정은 숨긴다.
+/// 구역 값은 그대로 그린다(닫힌 쪽).
+#[test]
+fn first_report_shows_notice_and_hides_definite_lines() {
+    let s = snapshot();
+    let mut rep = report(&s);
+    for f in &mut rep.findings {
+        if f.section == Section::Unneeded {
+            f.section = Section::Check;
+        }
+    }
+    for c in &mut rep.classified {
+        c.usage.state = UsageState::Unknown;
+        c.usage.reasons = vec![UsageReason::CpuUnknown, UsageReason::DiskUnknown];
+    }
+    rep.totals.unneeded_bytes = 0;
+    let mut m = Model::new(Some(done_config(AutoLevel::Safe)), None, false);
+    m.apply(first_scan_update(rep.clone()));
+    assert!(view::first_report(&m));
+    for l in both(&mut m) {
+        assert_eq!(l[1], view::RECLAIM_FIRST);
+        assert_eq!(l[4], view::FIRST_REPORT);
+        assert!(!has(&l, "필요 없음 0") && !has(&l, view::UNNEEDED_EMPTY_LINE));
+        assert!(!has(&l, "확보 가능 0") && !has(&l, "맥 상태가 좋아요"));
+        assert!(has(&l, "확인 필요 ") && has(&l, "주인 끝남·CPU 모름"));
+    }
+
+    m.apply(update_from(rep, AutoLevel::Safe, |_, _| {}));
+    assert!(
+        !view::first_report(&m),
+        "두 번째 확인(측정 간격 있음)부터는 안내 없음"
+    );
+    let l = render(&mut m, 80, 24);
+    assert!(!has(&l, view::FIRST_REPORT));
+    assert!(has(&l, "필요 없음 0") && has(&l, view::UNNEEDED_EMPTY_LINE));
+    assert_eq!(l[1], "    확보 가능 0 · 확인하면 +8.0GB · 직접 하면 +22GB");
+
+    let mut e = Model::new(Some(done_config(AutoLevel::Safe)), None, false);
+    e.apply(first_scan_update(report_empty()));
+    for l in both(&mut e) {
+        assert_eq!(l[1], view::RECLAIM_FIRST);
+        assert_eq!(l[4], view::FIRST_REPORT);
+        assert!(!has(&l, "맥 상태가 좋아요") && !has(&l, "지금 확보할 것이 없어요"));
     }
 }
 

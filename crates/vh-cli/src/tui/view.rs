@@ -91,6 +91,10 @@ pub const EMPTY_BODY: [&str; 6] = [
 ];
 pub const EMPTY_NOT_OK: &str = "  지금 vh가 정리할 것은 없어요.";
 pub const UNNEEDED_EMPTY_LINE: &str = "  지금 정리 추천할 것이 없어요.";
+/// 첫 보고(측정 간격 없음) 동안 보고 탭 본문 맨 위.
+pub const FIRST_REPORT: &str = "  처음 확인 중이에요. 몇 초 뒤 근거가 채워져요.";
+/// 첫 보고 동안 확보량 줄(단정하지 않음).
+pub const RECLAIM_FIRST: &str = "    처음 확인 중이에요";
 
 pub const SETTINGS_LINES: [&str; 9] = [
     "",
@@ -329,9 +333,20 @@ fn auto_count(l: &super::state::Latest) -> String {
     )
 }
 
-/// 맨 위 둘째 줄: 확보량.
+/// 첫 보고인지: 지킴이가 이전 스캔이 없어 CPU를 재지 못하면 `snapshot.cpu_sample_interval_ms`를
+/// 비워 둔다(vh-guard `fill_cpu_pct`). 그때는 CPU·디스크 근거가 모두 '모름'이다.
+pub fn first_report(m: &Model) -> bool {
+    m.latest
+        .as_ref()
+        .is_some_and(|l| l.snapshot.cpu_sample_interval_ms.is_none())
+}
+
+/// 맨 위 둘째 줄: 확보량. 첫 보고에서 '필요 없음'이 0이면 단정하지 않는다.
 pub fn reclaim_line(m: &Model) -> String {
     match &m.latest {
+        Some(l) if first_report(m) && l.report.totals.unneeded_bytes == 0 => {
+            RECLAIM_FIRST.to_string()
+        }
         Some(l) => format!(
             "    {}",
             sec::reclaim_text(&l.report.totals).unwrap_or_else(|| sec::RECLAIM_NOTHING.to_string())
@@ -406,7 +421,9 @@ fn wrap_pairs(s: &mut Screen, pairs: &[(&str, String)], max: usize) {
 }
 
 /// 80칸에서 대상 칸 폭. 넓은 창에서는 늘어난 만큼 더한다.
-const NAME_W: usize = 22;
+const NAME_W: usize = 21;
+/// 나이 칸(가장 긴 '23시간' 6칸 + 근거 칸과의 공백 1칸).
+const AGE_W: usize = 7;
 const EVIDENCE_W: usize = 24;
 
 pub fn column_header(w: usize) -> String {
@@ -414,7 +431,7 @@ pub fn column_header(w: usize) -> String {
         "      {}{}  {}{}지킴이",
         pad("대상", NAME_W + w.saturating_sub(80)),
         lpad("크기", 6),
-        pad("나이", 6),
+        pad("나이", AGE_W),
         pad("근거", EVIDENCE_W)
     )
 }
@@ -441,7 +458,7 @@ pub fn finding_row(r: &Row, cur: bool, picked: bool, w: usize, now_unix_ms: u64)
         boxed,
         pad(&label, lw),
         lpad(&size, 6),
-        pad(&age, 6),
+        pad(&age, AGE_W),
         pad(
             &truncate(&r.evidence(now_unix_ms), EVIDENCE_W - 1),
             EVIDENCE_W
@@ -532,12 +549,13 @@ enum Disp {
 
 fn report_lines(m: &Model) -> Vec<Disp> {
     let totals = m.latest.as_ref().map(|l| &l.report.totals);
+    let first = first_report(m);
     let mut out = Vec::new();
     for sect in sec::ORDER {
         let idx: Vec<usize> = (0..m.rows.len())
             .filter(|&i| m.rows[i].section == sect)
             .collect();
-        if idx.is_empty() && sect != Section::Unneeded {
+        if idx.is_empty() && (sect != Section::Unneeded || first) {
             continue;
         }
         let bytes = match (sect, totals) {
@@ -582,7 +600,14 @@ fn findings_body(s: &mut Screen, m: &Model, body_h: usize) {
         s.text("  맥 상태를 확인하고 있어요…");
         return;
     }
+    let first = first_report(m);
+    if first {
+        s.text(FIRST_REPORT);
+    }
     if m.rows.is_empty() {
+        if first {
+            return;
+        }
         let ok = m
             .latest
             .as_ref()
@@ -593,7 +618,7 @@ fn findings_body(s: &mut Screen, m: &Model, body_h: usize) {
         return;
     }
     let dh = detail_h(body_h);
-    let list_h = body_h - 2 - dh;
+    let list_h = body_h - 2 - dh - usize::from(first);
     let now = m.latest.as_ref().map_or(0, |l| l.snapshot.taken_at_unix_ms);
     s.text(&column_header(s.w));
     let disp = report_lines(m);
