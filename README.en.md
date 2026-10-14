@@ -86,17 +86,18 @@ While the screen is open, the guard checks the Mac every 5 seconds (every 2 seco
 
 ## Install
 
-macOS only. Requires Rust 1.88 or later.
+macOS only (Apple silicon and Intel).
+
+```sh
+brew install NewTurn2017/tap/stopcat
+```
+
+Update with `brew upgrade stopcat`, remove with `brew uninstall stopcat`.
+
+To install from source without Homebrew, you need Rust 1.88 or later.
 
 ```sh
 cargo install --git https://github.com/NewTurn2017/stopcat stopcat-cli
-```
-
-This installs `~/.cargo/bin/stopcat`. You can also clone the repository and build it yourself:
-
-```sh
-git clone https://github.com/NewTurn2017/stopcat && cd stopcat
-cargo install --path crates/stopcat-cli
 ```
 
 No administrator privileges (sudo) are needed. Nothing resident and no login items are installed.

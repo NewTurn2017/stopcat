@@ -1,0 +1,47 @@
+# v* 태그를 올리면 arm64·Intel 유니버설 바이너리를 빌드해 GitHub 릴리스에 올린다.
+# Homebrew 공식(NewTurn2017/homebrew-tap의 Formula/stopcat.rb)이 이 파일을 내려받는다.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 태그와 Cargo 버전이 같은지 확인
+        run: |
+          want="v$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
+          test "$GITHUB_REF_NAME" = "$want" || { echo "태그 $GITHUB_REF_NAME ≠ Cargo $want"; exit 1; }
+
+      - name: Rust 타깃 추가
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: 빌드
+        run: |
+          cargo build --release --locked -p stopcat-cli --target aarch64-apple-darwin
+          cargo build --release --locked -p stopcat-cli --target x86_64-apple-darwin
+
+      - name: 유니버설 바이너리로 묶기
+        run: |
+          name="stopcat-${GITHUB_REF_NAME}-macos-universal.tar.gz"
+          mkdir -p dist/stopcat
+          lipo -create -output dist/stopcat/stopcat \
+            target/aarch64-apple-darwin/release/stopcat \
+            target/x86_64-apple-darwin/release/stopcat
+          lipo -info dist/stopcat/stopcat
+          dist/stopcat/stopcat --version
+          cp LICENSE README.md README.en.md dist/stopcat/
+          tar -C dist -czf "dist/$name" stopcat
+          (cd dist && shasum -a 256 "$name" > "$name.sha256" && cat "$name.sha256")
+
+      - name: 릴리스 만들기
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.sha256 --title "$GITHUB_REF_NAME" --generate-notes

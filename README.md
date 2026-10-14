@@ -84,17 +84,18 @@ stopcat  메모리 정상 — 압력 1 · 압축 41GB · 스왑 1.6/2GB · 부�
 
 ## 설치
 
-macOS 전용이고, Rust(1.88 이상)가 필요합니다.
+macOS 전용입니다(Apple 실리콘·Intel 모두).
+
+```sh
+brew install NewTurn2017/tap/stopcat
+```
+
+업데이트는 `brew upgrade stopcat`, 지우기는 `brew uninstall stopcat`입니다.
+
+Homebrew 없이 소스에서 설치하려면 Rust(1.88 이상)가 필요합니다.
 
 ```sh
 cargo install --git https://github.com/NewTurn2017/stopcat stopcat-cli
-```
-
-`~/.cargo/bin/stopcat`이 설치됩니다. 저장소를 받아 직접 빌드해도 됩니다.
-
-```sh
-git clone https://github.com/NewTurn2017/stopcat && cd stopcat
-cargo install --path crates/stopcat-cli
 ```
 
 관리자 권한(sudo)은 필요 없습니다. 상주 프로그램이나 로그인 항목을 설치하지 않습니다.
