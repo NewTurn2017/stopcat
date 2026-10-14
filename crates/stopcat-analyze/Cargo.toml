@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [features]
 # 합성 2,000 프로세스 스냅샷 생성기(테스트·벤치용). 기본 꺼짐.

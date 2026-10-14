@@ -3,3 +3,17 @@
 *.profraw
 /.vscode/
 /.idea/
+
+# 비밀값·로컬 환경
+.env
+.env.local
+.env*.local
+*.pem
+*.key
+
+# 로컬 에이전트·도구 상태
+.claude/
+.omx/
+.agents/
+.senior-mode/
+*.log

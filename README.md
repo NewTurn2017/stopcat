@@ -1,3 +1,5 @@
+[한국어](README.md) · [English](README.en.md)
+
 # StopCat — 필요 없는 것만 멈추는 맥 정리 도구
 
 맥이 느려졌을 때 "무엇이 왜 떠 있는지"를 쉬운 한국어로 보여 주고, 확인을 받은 뒤에만 정리하는 macOS 도구입니다. 화면을 띄워 두면 **지킴이**가 필요 없는 것과 되찾을 수 있는 양을 근거와 함께 보고하고, 맥이 불안정할 때만 '필요 없음'이 확실한 것을 정리합니다. 지금 쓰고 있는 것은 끄지도, 느리게 하지도 않습니다.
@@ -5,6 +7,8 @@
 AI로 서버를 띄우고 여러 에이전트를 돌리다 보면 주인 없는 프로세스, 끝난 테스트가 남긴 에뮬레이터·브라우저, 외부에 열린 포트가 쌓입니다. `stopcat`은 프로세스 번호(PID) 대신 **프로젝트와 AI 세션 단위**로 맥을 보고, 끄기 전에 **누가 왜 띄웠는지** 설명합니다.
 
 > 이 문서의 화면 예시는 모두 합성 데이터입니다. 실제 값은 맥마다 다릅니다.
+>
+> 이름은 CPU가 바쁠수록 고양이가 빨리 달리는 메뉴바 앱 [RunCat](https://kyome.io/runcat/)에서 착안했지만, StopCat은 RunCat과 관계없는 독립 프로젝트입니다.
 
 ## stopcat 하나로 쓰기
 
@@ -80,12 +84,17 @@ stopcat  메모리 정상 — 압력 1 · 압축 41GB · 스왑 1.6/2GB · 부�
 
 ## 설치
 
-Rust(1.88 이상)가 필요합니다.
+macOS 전용이고, Rust(1.88 이상)가 필요합니다.
 
 ```sh
-cargo build --release
-# 만들어진 실행 파일: target/release/stopcat
-cp target/release/stopcat /usr/local/bin/   # 또는 PATH에 있는 아무 폴더
+cargo install --git https://github.com/NewTurn2017/stopcat stopcat-cli
+```
+
+`~/.cargo/bin/stopcat`이 설치됩니다. 저장소를 받아 직접 빌드해도 됩니다.
+
+```sh
+git clone https://github.com/NewTurn2017/stopcat && cd stopcat
+cargo install --path crates/stopcat-cli
 ```
 
 관리자 권한(sudo)은 필요 없습니다. 상주 프로그램이나 로그인 항목을 설치하지 않습니다.
@@ -272,3 +281,7 @@ $ stopcat fix
 ## 문제 신고
 
 `stopcat snapshot --json > snapshot.json`으로 받은 파일을 함께 보내 주세요. 인자 속 비밀값은 가려지지만, 폴더 이름·프로그램 이름은 그대로 들어 있으니 보내기 전에 한 번 훑어보세요.
+
+## 라이선스
+
+[MIT](LICENSE)
