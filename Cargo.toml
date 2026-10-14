@@ -1,13 +1,13 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/vh-model",
-    "crates/vh-sample",
-    "crates/vh-analyze",
-    "crates/vh-act",
-    "crates/vh-guard",
-    "crates/vh-cli",
-    "crates/vh-lab",
+    "crates/stopcat-model",
+    "crates/stopcat-sample",
+    "crates/stopcat-analyze",
+    "crates/stopcat-act",
+    "crates/stopcat-guard",
+    "crates/stopcat-cli",
+    "crates/stopcat-lab",
 ]
 
 [workspace.package]
@@ -25,11 +25,11 @@ anyhow = "1"
 tempfile = "3"
 ratatui = { version = "=0.30.2", default-features = false, features = ["crossterm"] }
 crossterm = { version = "=0.29.0", default-features = false, features = ["events"] }
-vh-model = { path = "crates/vh-model" }
-vh-sample = { path = "crates/vh-sample" }
-vh-analyze = { path = "crates/vh-analyze" }
-vh-act = { path = "crates/vh-act" }
-vh-guard = { path = "crates/vh-guard" }
+stopcat-model = { path = "crates/stopcat-model" }
+stopcat-sample = { path = "crates/stopcat-sample" }
+stopcat-analyze = { path = "crates/stopcat-analyze" }
+stopcat-act = { path = "crates/stopcat-act" }
+stopcat-guard = { path = "crates/stopcat-guard" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

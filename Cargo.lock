@@ -754,6 +754,91 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
+name = "stopcat-act"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "stopcat-model",
+ "tempfile",
+]
+
+[[package]]
+name = "stopcat-analyze"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "stopcat-model",
+]
+
+[[package]]
+name = "stopcat-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "crossterm",
+ "libc",
+ "ratatui",
+ "serde",
+ "serde_json",
+ "stopcat-act",
+ "stopcat-analyze",
+ "stopcat-guard",
+ "stopcat-model",
+ "stopcat-sample",
+ "tempfile",
+]
+
+[[package]]
+name = "stopcat-guard"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "stopcat-act",
+ "stopcat-analyze",
+ "stopcat-model",
+ "stopcat-sample",
+ "tempfile",
+]
+
+[[package]]
+name = "stopcat-lab"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "stopcat-act",
+ "stopcat-analyze",
+ "stopcat-guard",
+ "stopcat-model",
+ "stopcat-sample",
+ "tempfile",
+]
+
+[[package]]
+name = "stopcat-model"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "stopcat-sample"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde_json",
+ "stopcat-model",
+ "tempfile",
+]
+
+[[package]]
 name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -884,91 +969,6 @@ name = "unicode-width"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
-
-[[package]]
-name = "vh-act"
-version = "0.1.0"
-dependencies = [
- "libc",
- "serde",
- "serde_json",
- "tempfile",
- "vh-model",
-]
-
-[[package]]
-name = "vh-analyze"
-version = "0.1.0"
-dependencies = [
- "serde_json",
- "vh-model",
-]
-
-[[package]]
-name = "vh-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "crossterm",
- "libc",
- "ratatui",
- "serde",
- "serde_json",
- "tempfile",
- "vh-act",
- "vh-analyze",
- "vh-guard",
- "vh-model",
- "vh-sample",
-]
-
-[[package]]
-name = "vh-guard"
-version = "0.1.0"
-dependencies = [
- "libc",
- "serde",
- "serde_json",
- "tempfile",
- "vh-act",
- "vh-analyze",
- "vh-model",
- "vh-sample",
-]
-
-[[package]]
-name = "vh-lab"
-version = "0.1.0"
-dependencies = [
- "libc",
- "serde",
- "serde_json",
- "tempfile",
- "vh-act",
- "vh-analyze",
- "vh-guard",
- "vh-model",
- "vh-sample",
-]
-
-[[package]]
-name = "vh-model"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "vh-sample"
-version = "0.1.0"
-dependencies = [
- "libc",
- "serde_json",
- "tempfile",
- "vh-model",
-]
 
 [[package]]
 name = "wasi"

@@ -1,0 +1,22 @@
+[package]
+name = "stopcat-lab"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+stopcat-model = { workspace = true }
+stopcat-sample = { workspace = true }
+stopcat-analyze = { workspace = true }
+stopcat-act = { workspace = true }
+stopcat-guard = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+libc = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
