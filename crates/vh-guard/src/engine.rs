@@ -3,10 +3,10 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use vh_act::{Policy, PriorityTarget, Selection};
+use vh_act::{PlanOrigin, Policy, PriorityTarget, Selection};
 use vh_model::{
     ActionOutcome, ActionPlan, AutoLevel, DemotedProc, FinalState, GuardEvent, GuardEventKind,
-    GuardPolicy, GuardStatus, HealthLevel, PendingAction, ProcRef, Report, Snapshot, Step,
+    GuardPolicy, GuardStatus, HealthLevel, PendingAction, ProcRef, Refusal, Report, Snapshot, Step,
 };
 
 use crate::backend::GuardBackend;
@@ -304,8 +304,9 @@ impl<B: GuardBackend> Engine<B> {
                 request_id,
                 plan,
                 snapshot,
+                origin,
             } => {
-                let result = self.run_manual(request_id, &plan, snapshot, &mut events);
+                let result = self.run_manual(request_id, plan, snapshot, origin, &mut events);
                 return self.update_after(events, Some(result));
             }
             GuardCommand::Shutdown => {
@@ -391,6 +392,7 @@ impl<B: GuardBackend> Engine<B> {
             allow_demote: false,
             total_deadline_ms: EXEC_DEADLINE_MS,
             max_actions,
+            origin: PlanOrigin::Auto,
         }
     }
 
@@ -592,12 +594,22 @@ impl<B: GuardBackend> Engine<B> {
     fn run_manual(
         &mut self,
         request_id: u64,
-        plan: &ActionPlan,
+        mut plan: ActionPlan,
         snapshot: Arc<Snapshot>,
+        origin: PlanOrigin,
         events: &mut Vec<GuardEvent>,
     ) -> ManualRunResult {
+        let refused = if origin == PlanOrigin::Pointed {
+            Vec::new()
+        } else {
+            self.recheck_in_use(&mut plan, &snapshot, events)
+        };
         let run_id = format!("manual-{request_id}");
-        let outcomes = self.backend.execute(plan, &snapshot, &run_id);
+        let outcomes = if plan.items.is_empty() {
+            Vec::new()
+        } else {
+            self.backend.execute(&plan, &snapshot, &run_id)
+        };
         let now = self.now_unix_ms();
         for o in &outcomes {
             let t = o.action.target;
@@ -639,7 +651,61 @@ impl<B: GuardBackend> Engine<B> {
             request_id,
             outcomes,
             state_dir: self.backend.state_dir().to_path_buf(),
+            refused,
         }
+    }
+
+    /// 일괄(Bulk·Auto) 수동 정리의 실행 직전 R18: 지킴이의 마지막 판정(없으면 받은 스냅샷 분석)으로
+    /// 종료 항목의 대상·자손 중 쓰고 있는 것이 있으면 계획에서 뺀다. 우선순위·재개 항목은 그대로 둔다.
+    fn recheck_in_use(
+        &mut self,
+        plan: &mut ActionPlan,
+        snapshot: &Arc<Snapshot>,
+        events: &mut Vec<GuardEvent>,
+    ) -> Vec<Refusal> {
+        let (snap, report) = match &self.last {
+            Some((s, r)) => (s.clone(), r.clone()),
+            None => (snapshot.clone(), Arc::new(self.backend.analyze(snapshot))),
+        };
+        let mut refused = Vec::new();
+        plan.items.retain(|it| {
+            if !it.steps.contains(&Step::Term) {
+                return true;
+            }
+            match vh_act::in_use_reasons(&snap, &report, it.target) {
+                None => true,
+                Some(u) => {
+                    let grounds: Vec<&str> =
+                        u.reasons.iter().map(|r| vh_act::usage_reason_ko(*r)).collect();
+                    let grounds = if grounds.is_empty() {
+                        "사용 판정이 없음".to_string()
+                    } else {
+                        grounds.join(", ")
+                    };
+                    refused.push(Refusal {
+                        target: it.target,
+                        rule: vh_act::rule::R18_IN_USE.to_string(),
+                        reason_ko: format!(
+                            "실행 직전에 다시 보니 쓰고 있어요(pid {}: {grounds}). 일괄 정리에서는 끄지 않아요",
+                            u.at.pid
+                        ),
+                    });
+                    false
+                }
+            }
+        });
+        for rf in &refused {
+            let ev = self.event(
+                GuardEventKind::Refused,
+                Some(rf.target),
+                None,
+                None,
+                &format!("pid {}", rf.target.pid),
+                &format!("{}: {}", rf.rule, rf.reason_ko),
+            );
+            events.push(ev);
+        }
+        refused
     }
 
     fn undo_demote(

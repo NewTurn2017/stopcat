@@ -41,6 +41,7 @@ fn upd(b: &GuardUpdate, seq: u64, events: Vec<GuardEvent>, manual: Option<u64>) 
         request_id,
         outcomes: Vec::new(),
         state_dir: PathBuf::from("/tmp/x"),
+        refused: Vec::new(),
     });
     u
 }

@@ -4,10 +4,11 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use vh_act::{ExecEnv, Policy, PriorityTarget, RealProber, RealSignaler, Selection, Signaler};
-use vh_model::{ActionOutcome, ActionPlan, Report, Snapshot};
+use vh_model::{ActionOutcome, ActionPlan, HealthLevel, Report, Snapshot};
 use vh_sample::CollectOptions;
 
 use crate::notify::{Notifier, NullNotifier, OsascriptNotifier};
+use crate::stability::forced_health_from;
 use crate::{env, lock::AllowListSignaler};
 
 /// 지킴이 백엔드. 스레드로 옮겨지므로 `Send + 'static`. 신호는 `execute` 안에서만 나간다.
@@ -27,6 +28,11 @@ pub trait GuardBackend: Send + 'static {
     fn notify(&mut self, title: &str, body: &str) -> Result<(), String>;
     fn now_unix_ms(&self) -> u64;
     fn state_dir(&self) -> &Path;
+    /// 시험용 강제 건강 값(W4). 엔진이 스캔마다 부르고, 실제 건강과 둘 중 높은 쪽으로 불안정을 판단한다.
+    /// `Report.health`는 바꾸지 않는다. 진짜 백엔드는 `VH_E2E_FORCE_HEALTH`(+`VH_E2E_ALLOW_PIDS`)에서 읽는다.
+    fn forced_health(&self) -> Option<HealthLevel> {
+        None
+    }
 }
 
 /// 진짜 백엔드: vh-sample·vh-analyze·vh-act(RealProber)·osascript.
@@ -35,6 +41,7 @@ pub struct RealGuardBackend {
     signaler: Box<dyn Signaler + Send>,
     notifier: Box<dyn Notifier>,
     locked: Option<BTreeSet<i32>>,
+    forced: Option<HealthLevel>,
 }
 
 impl std::fmt::Debug for RealGuardBackend {
@@ -58,6 +65,10 @@ impl RealGuardBackend {
         };
         let mut be = Self::with(signaler, notifier)?;
         be.locked = locked;
+        be.forced = forced_health_from(
+            std::env::var(env::E2E_FORCE_HEALTH).ok().as_deref(),
+            allow.as_deref(),
+        );
         Ok(be)
     }
 
@@ -88,7 +99,14 @@ impl RealGuardBackend {
             signaler,
             notifier,
             locked: None,
+            forced: None,
         }
+    }
+
+    /// 시험용 강제 건강 값(같은 프로세스 실험실용 빌더, env를 읽지 않는다).
+    pub fn with_forced_health(mut self, forced: Option<HealthLevel>) -> Self {
+        self.forced = forced;
+        self
     }
 }
 
@@ -172,5 +190,9 @@ impl GuardBackend for RealGuardBackend {
 
     fn state_dir(&self) -> &Path {
         &self.state_dir
+    }
+
+    fn forced_health(&self) -> Option<HealthLevel> {
+        self.forced
     }
 }

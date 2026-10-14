@@ -48,7 +48,7 @@ fn direct(snap: &Snapshot, t: ProcRef, tree: bool, policy: &Policy) -> ActionPla
         }],
         ..Selection::default()
     };
-    let p = plan(snap, &report(Vec::new(), Vec::new()), &sel, policy);
+    let p = plan_idle(snap, &report(Vec::new(), Vec::new()), &sel, policy);
     assert!(p.refused.is_empty(), "{:?}", p.refused);
     assert_eq!(p.items.len(), 1);
     p
@@ -200,7 +200,7 @@ fn act7_8_demote_sets_darwin_bg() {
         allow_demote: true,
         ..Policy::default()
     };
-    let p = plan(&snap, &rep, &sel, &policy);
+    let p = plan_idle(&snap, &rep, &sel, &policy);
     assert_eq!(p.items[0].steps, vec![Step::Demote]);
     let sig = GuardedSignaler::allowing(c.all_pids());
     let run = exec_live(&snap, &p, &sig);

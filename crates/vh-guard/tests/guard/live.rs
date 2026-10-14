@@ -3,9 +3,10 @@
 
 use std::process::{Child, Command, Stdio};
 
+use vh_act::PlanOrigin;
 use vh_act::{Prober, RealProber, RealSignaler};
 use vh_guard::fake::*;
-use vh_guard::{AllowListSignaler, Engine, GuardCommand, GuardEventKind};
+use vh_guard::{AllowListSignaler, Engine, GuardCommand, GuardEventKind, GuardUpdate};
 use vh_model::*;
 
 use crate::common::*;
@@ -95,6 +96,16 @@ fn scene_with(child: &BusyChild) -> Scene {
     sc
 }
 
+fn demote_by_hand(e: &mut Engine<FakeGuardBackend>, u: &GuardUpdate, t: ProcRef) -> GuardUpdate {
+    e.handle(GuardCommand::RunPlan {
+        request_id: 1,
+        plan: demote_plan(u, &[t]),
+        snapshot: u.snapshot.clone(),
+        origin: PlanOrigin::Pointed,
+    })
+    .expect("직접 낮추기 갱신")
+}
+
 #[test]
 fn live_demote_then_undo_and_shutdown_restore_own_busy_child() {
     let child = BusyChild::spawn();
@@ -120,6 +131,17 @@ fn live_demote_then_undo_and_shutdown_restore_own_busy_child() {
         clock.advance(5000);
     }
     let u = last.expect("갱신");
+    assert!(
+        u.status.demoted.is_empty(),
+        "CPU 180%여도 자동 낮추기 없음(W4)"
+    );
+    assert_eq!(
+        task_priority(child.r.pid).unwrap(),
+        p0,
+        "자동 스캔 4번 뒤에도 우선순위 그대로"
+    );
+
+    let u = demote_by_hand(&mut e, &u, child.r);
     assert_eq!(
         u.status
             .demoted
@@ -131,7 +153,10 @@ fn live_demote_then_undo_and_shutdown_restore_own_busy_child() {
         u.status
     );
     let p_bg = task_priority(child.r.pid).unwrap();
-    assert!(p_bg < p0, "demote 뒤 우선순위가 낮아야 함: {p0} → {p_bg}");
+    assert!(
+        p_bg < p0,
+        "직접 낮춘 뒤 우선순위가 낮아야 함: {p0} → {p_bg}"
+    );
     eprintln!(
         "live: pid {} pti_priority {p0} → demote {p_bg}",
         child.r.pid
@@ -143,11 +168,18 @@ fn live_demote_then_undo_and_shutdown_restore_own_busy_child() {
     assert_eq!(p_back, p0, "undemote 뒤 원래 값");
     eprintln!("live: undo → {p_back}");
 
+    let mut last = None;
     for _ in 0..4 {
-        e.scan();
+        last = e.scan();
         clock.advance(5000);
     }
-    assert_eq!(e.status().demoted.len(), 1, "다시 폭주 → 다시 Demote");
+    assert!(
+        e.status().demoted.is_empty(),
+        "다시 폭주해도 자동으로는 낮추지 않음"
+    );
+    assert_eq!(task_priority(child.r.pid).unwrap(), p0);
+    demote_by_hand(&mut e, &last.expect("갱신"), child.r);
+    assert_eq!(e.status().demoted.len(), 1);
     assert!(task_priority(child.r.pid).unwrap() < p0);
     let (report, _) = e.restore_all();
     assert_eq!(report.undemoted, vec![child.r]);

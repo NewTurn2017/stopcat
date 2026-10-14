@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use vh_model::{
-    Confidence, ExeOrigin, Finding, FindingKind, Kind, ProcRef, ProcStatus, Section, Suggestion,
+    Confidence, ExeOrigin, Finding, FindingKind, Kind, OwnerState, ProcRef, ProcStatus, Section,
+    Suggestion,
 };
 
 use crate::ctx::{Ctx, DeadWhy};
@@ -610,7 +611,7 @@ fn zombies(c: &Ctx) -> Vec<Finding> {
             let restart = if c.cls[j].kind == Kind::AgentCli {
                 "부모가 에이전트 세션이라 핸드오프를 저장한 뒤 재시작하면 사라져요."
             } else {
-                "부모를 재시작하면 사라져요."
+                "띄운 앱(부모)을 다시 시작하면 사라져요."
             };
             Finding {
                 id: format!("zombie:{}:{}", pr.pid, pr.start_time_unix_ms),
@@ -867,23 +868,34 @@ fn runaways(c: &Ctx) -> Vec<Finding> {
         {
             continue;
         }
-        let kind = c.cls[i].kind;
         let label = c.cls[i].label.clone();
-        let review = matches!(kind, Kind::AgentCli | Kind::GuiApp | Kind::AppHelper);
+        let owned = matches!(c.usage[i].owner, OwnerState::Alive | OwnerState::User);
         let mut detail = format!(
-            "잰 순간(약 {}ms) CPU를 {:.0}% 썼어요(코어 1개 = 100%). 순간값이라 잠깐 바쁜 것일 수도 있어요.",
+            "잰 순간(약 {}ms) CPU를 {:.0}% 썼어요(코어 1개 = 100%).",
             c.s.cpu_sample_interval_ms.unwrap_or(0),
             pct
         );
-        let sugg = if review {
+        let (sugg, reasons) = if owned {
+            detail.push_str(" 띄운 쪽이 살아 있는 일하는 작업이라 vh는 건드리지 않아요.");
+            (
+                Suggestion::None,
+                vec![
+                    "cpu_ge_100_instant".to_string(),
+                    "owner_present".to_string(),
+                ],
+            )
+        } else {
             detail.push_str(&review_note(
-                "앱·에이전트 세션은 우선순위를 낮추면 느려짐",
+                "주인 없이 CPU를 쓰고 있음, 무엇인지 확인 필요",
                 p.pid,
             ));
-            Suggestion::Review
-        } else {
-            detail.push_str(" 우선순위를 낮추면(demote) 다른 작업이 덜 느려져요.");
-            Suggestion::Demote
+            (
+                Suggestion::Review,
+                vec![
+                    "cpu_ge_100_instant".to_string(),
+                    "owner_gone_or_unknown".to_string(),
+                ],
+            )
         };
         out.push(build(
             c,
@@ -896,7 +908,7 @@ fn runaways(c: &Ctx) -> Vec<Finding> {
                 title: format!("{label} CPU {pct:.0}%"),
                 short: format!("{label} CPU {pct:.0}%"),
                 detail,
-                reasons: vec!["cpu_ge_100_instant".into()],
+                reasons,
                 suggestion: sugg,
             },
         ));
@@ -937,7 +949,7 @@ fn heavy(c: &Ctx, covered: &[bool]) -> Vec<Finding> {
                         title: format!("{label} {}, {}째", size(fp), age(c.age_ms(i))),
                         short: format!("{label} {}", size(fp)),
                         detail: format!(
-                            "{label}{}이 {}(본체 {})를 쓰고 있어요. {}째 실행 중이에요. 핸드오프를 저장한 뒤 재시작하는 걸 권해요. 강제로 끄면 대화 맥락이 사라져서 vh는 끄지 않아요.",
+                            "{label}{}이 {}(본체 {})를 쓰고 있어요. {}째 실행 중이에요. 핸드오프를 저장한 뒤 세션을 끝내고 새로 시작하면 약 {}를 되찾아요. 강제로 끄면 대화 맥락이 사라져서 vh는 끄지 않아요.",
                             if place.is_empty() {
                                 String::new()
                             } else {
@@ -945,7 +957,8 @@ fn heavy(c: &Ctx, covered: &[bool]) -> Vec<Finding> {
                             },
                             with_kids(nd, fp),
                             size(root_fp),
-                            age(c.age_ms(i))
+                            age(c.age_ms(i)),
+                            size(fp)
                         ),
                         reasons: vec![code.into()],
                         suggestion: Suggestion::HandoffThenRestart,
@@ -967,17 +980,17 @@ fn heavy(c: &Ctx, covered: &[bool]) -> Vec<Finding> {
         let note = match kind {
             Kind::VirtualMachine => {
                 reasons.push("vm_expected_large".into());
-                " 가상 머신은 원래 메모리를 크게 잡아요. 안 쓰는 컨테이너를 멈추는 편이 효과적이에요."
+                " 가상 머신은 원래 메모리를 크게 잡아요. 앱에서 안 쓰는 컨테이너를 멈추면 줄어요."
             }
             Kind::LocalLlm => {
                 reasons.push("llm_model_loaded".into());
-                " 로컬 LLM은 모델을 메모리에 올려 두기 때문에 커요. 안 쓰면 끄세요."
+                " 로컬 LLM은 모델을 메모리에 올려 두기 때문에 커요. 모델을 내리거나 앱을 끄면 되찾아요."
             }
             Kind::LanguageServer => {
                 reasons.push("worktree_tsserver".into());
                 " 편집기가 띄운 언어 서버예요. 안 쓰는 워크트리·창을 닫으면 줄어요."
             }
-            _ => "",
+            _ => " 쓰지 않는다면 띄운 앱이나 터미널에서 직접 끄면 되찾아요.",
         };
         out.push(build(
             c,

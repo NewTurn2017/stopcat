@@ -2,12 +2,28 @@
 
 use std::sync::Arc;
 
-use vh_act::{AuditEntry, AuditEvent, Policy, Selection, audit_log_path};
+use vh_act::{AuditEntry, AuditEvent, PlanOrigin, Policy, Selection, audit_log_path};
 use vh_guard::fake::*;
-use vh_guard::{AutoLevel, Engine, GuardCommand, GuardEventKind, GuardPolicy};
+use vh_guard::{AutoLevel, Engine, GuardCommand, GuardEventKind, GuardPolicy, GuardUpdate};
 use vh_model::*;
 
 use crate::common::*;
+
+fn manual_demote(
+    e: &mut Engine<FakeGuardBackend>,
+    u: &GuardUpdate,
+    targets: &[ProcRef],
+) -> GuardUpdate {
+    let plan = demote_plan(u, targets);
+    assert_eq!(plan.items.len(), targets.len(), "{:?}", plan.refused);
+    e.handle(GuardCommand::RunPlan {
+        request_id: 900,
+        plan,
+        snapshot: Arc::clone(&u.snapshot),
+        origin: PlanOrigin::Pointed,
+    })
+    .expect("수동 낮추기 갱신")
+}
 
 fn engine_for(scene: &Scene, policy: GuardPolicy) -> (Engine<FakeGuardBackend>, Probe, FakeClock) {
     let clock = FakeClock::at(T0);
@@ -104,10 +120,11 @@ fn every_signal_goes_through_execute_audit_matches_signaler() {
     );
     let r = sc.plain(103, Kind::Watcher, OLD);
     let (mut e, probe, clock) = engine_for(&sc, safe());
-    e.backend_mut().cpu_rate_pct.insert(r.pid, 250.0);
-    for _ in 0..5 {
+    for _ in 0..4 {
         scan(&mut e, &clock);
     }
+    let u = scan(&mut e, &clock);
+    manual_demote(&mut e, &u, &[r]);
     let log = audit(&probe);
     let signals = log
         .iter()
@@ -302,24 +319,18 @@ fn set_scan_interval_updates_policy_and_next_scan() {
 }
 
 #[test]
-fn demote_after_three_scans_undo_restores_and_events_dedupe() {
+fn manual_demote_undo_restores_and_events_dedupe() {
     let mut sc = Scene::new();
     let r = sc.plain(201, Kind::DevServer, OLD);
     let (mut e, probe, clock) = engine_for(&sc, safe());
-    e.backend_mut().cpu_rate_pct.insert(201, 180.0);
-    scan(&mut e, &clock);
-    let u2 = scan(&mut e, &clock);
-    assert_eq!(u2.status.pending.len(), 1);
-    assert_eq!(u2.status.pending[0].step, Step::Demote);
-    assert_eq!(u2.status.pending[0].seen_scans, 1, "첫 스캔은 cpu_pct 없음");
-    scan(&mut e, &clock);
-    let u4 = scan(&mut e, &clock);
+    let u1 = scan(&mut e, &clock);
+    let u2 = manual_demote(&mut e, &u1, &[r]);
     assert_eq!(probe.log.demoted(), vec![201]);
     assert_eq!(probe.world.bg_of(201), Some(libc::PRIO_DARWIN_BG));
-    assert_eq!(count(&u4.new_events, GuardEventKind::Demoted), 1);
-    assert_eq!(u4.status.demoted.len(), 1);
-    assert_eq!(u4.status.demoted[0].target, r);
-    assert!(u4.status.demoted[0].label_ko.contains("CPU"));
+    assert_eq!(count(&u2.new_events, GuardEventKind::Demoted), 1);
+    assert_eq!(u2.status.demoted.len(), 1);
+    assert_eq!(u2.status.demoted[0].target, r);
+    assert!(u2.status.demoted[0].label_ko.contains("직접 낮춤"));
     let u5 = scan(&mut e, &clock);
     assert_eq!(count(&u5.new_events, GuardEventKind::Demoted), 0);
     assert_eq!(probe.log.demoted().len(), 1);
@@ -347,11 +358,8 @@ fn shutdown_restores_all_demoted_and_reports_vanished_without_signal() {
     let a = sc.plain(201, Kind::DevServer, OLD);
     let b = sc.plain(202, Kind::Watcher, OLD);
     let (mut e, probe, clock) = engine_for(&sc, safe());
-    e.backend_mut().cpu_rate_pct.insert(201, 150.0);
-    e.backend_mut().cpu_rate_pct.insert(202, 150.0);
-    for _ in 0..4 {
-        scan(&mut e, &clock);
-    }
+    let u = scan(&mut e, &clock);
+    manual_demote(&mut e, &u, &[a, b]);
     assert_eq!(probe.log.demoted(), vec![201, 202]);
     probe.world.with(|w| w.remove(202));
     let (report, events) = e.restore_all();
@@ -367,10 +375,8 @@ fn shutdown_failure_is_reported_with_errno() {
     let mut sc = Scene::new();
     let a = sc.plain(201, Kind::DevServer, OLD);
     let (mut e, probe, clock) = engine_for(&sc, safe());
-    e.backend_mut().cpu_rate_pct.insert(201, 150.0);
-    for _ in 0..4 {
-        scan(&mut e, &clock);
-    }
+    let u = scan(&mut e, &clock);
+    manual_demote(&mut e, &u, &[a]);
     assert_eq!(probe.log.demoted(), vec![201]);
     let failing = SyncSignaler {
         world: probe.world.clone(),
@@ -417,10 +423,12 @@ fn manual_run_plan_does_not_count_and_its_demote_is_restored_at_shutdown() {
             request_id: 7,
             plan,
             snapshot: Arc::clone(&u1.snapshot),
+            origin: PlanOrigin::Bulk,
         })
         .unwrap();
     let m = u.manual_result.expect("manual_result");
     assert_eq!(m.request_id, 7);
+    assert!(m.refused.is_empty(), "안 쓰는 대상은 일괄 재확인을 통과");
     assert_eq!(m.outcomes.len(), 2);
     assert_eq!(m.state_dir, probe.state_dir);
     assert!(!probe.world.alive(t));
@@ -586,10 +594,12 @@ fn status_reflects_memory() {
 }
 
 fn demote_201(e: &mut Engine<FakeGuardBackend>, probe: &Probe, clock: &FakeClock) {
-    e.backend_mut().cpu_rate_pct.insert(201, 180.0);
-    for _ in 0..4 {
-        scan(e, clock);
-    }
+    let u = scan(e, clock);
+    let r = ProcRef {
+        pid: 201,
+        start_time_unix_ms: OLD,
+    };
+    manual_demote(e, &u, &[r]);
     assert_eq!(probe.log.demoted(), vec![201]);
     assert_eq!(e.status().demoted.len(), 1);
 }
@@ -761,4 +771,68 @@ fn young_orphan_pending_shows_in_status_without_signal() {
     assert_eq!(u.status.pending[0].eta_ms, Some(60_000));
     scan(&mut e, &clock);
     assert!(probe.log.sent().is_empty(), "표시뿐, 신호 0");
+}
+
+#[test]
+fn bulk_run_plan_rechecks_in_use_before_execute_pointed_does_not() {
+    let mut sc = Scene::new();
+    let t = sc.leftover(
+        101,
+        Kind::McpServer,
+        Confidence::Confirmed,
+        OLD,
+        Some(false),
+    );
+    let (mut e, probe, clock) = engine_for(&sc, notify_only());
+    let u1 = scan(&mut e, &clock);
+    let sel = Selection {
+        finding_ids: Vec::new(),
+        pids: vec![t.pid],
+        min_confidence: Confidence::Possible,
+        direct: Vec::new(),
+    };
+    let plan = vh_act::plan(&u1.snapshot, &u1.report, &sel, &Policy::default());
+    assert_eq!(plan.items.len(), 1, "미리보기 때는 안 씀");
+
+    let (s, mut r) = sc.build(clock.now());
+    r.classified[0].usage = Usage {
+        state: UsageState::Active,
+        reasons: vec![UsageReason::PeerOutsideSubtree],
+        ..Usage::default()
+    };
+    e.backend_mut().script.clear();
+    e.backend_mut().push_script(s, r);
+    scan(&mut e, &clock);
+
+    let u = e
+        .handle(GuardCommand::RunPlan {
+            request_id: 3,
+            plan: plan.clone(),
+            snapshot: Arc::clone(&u1.snapshot),
+            origin: PlanOrigin::Bulk,
+        })
+        .unwrap();
+    let m = u.manual_result.expect("manual_result");
+    assert!(m.outcomes.is_empty());
+    assert_eq!(m.refused.len(), 1);
+    assert_eq!(m.refused[0].rule, vh_act::rule::R18_IN_USE);
+    assert!(m.refused[0].reason_ko.contains("다른 프로그램과 연결됨"));
+    assert_eq!(count(&u.new_events, GuardEventKind::Refused), 1);
+    assert!(probe.log.sent().is_empty(), "일괄 재확인에 걸리면 신호 0");
+
+    let u = e
+        .handle(GuardCommand::RunPlan {
+            request_id: 4,
+            plan,
+            snapshot: Arc::clone(&u1.snapshot),
+            origin: PlanOrigin::Pointed,
+        })
+        .unwrap();
+    let m = u.manual_result.expect("manual_result");
+    assert!(
+        m.refused.is_empty(),
+        "직접 지목은 경고만(화면 몫), 막지 않음"
+    );
+    assert_eq!(m.outcomes.len(), 1);
+    assert!(!probe.world.alive(t));
 }

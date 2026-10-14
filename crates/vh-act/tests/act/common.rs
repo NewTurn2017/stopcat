@@ -132,7 +132,44 @@ pub fn classified(target: ProcRef, kind: Kind) -> Classified {
         owner_source: None,
         owner_label_ko: None,
         owner_alive: None,
-        usage: Usage::default(),
+        usage: idle_usage(),
+    }
+}
+
+/// 리포트에 분류가 없는 스냅샷 프로세스를 Kind::Other·Idle로 채운다(있는 분류는 그대로).
+/// W4 R18 이전 테스트는 분류 없이 계획했으므로, 같은 뜻(보호 Kind 아님, 쓰고 있지 않음)으로 입력을 보강한다.
+pub fn with_idle(s: &Snapshot, r: &Report) -> Report {
+    let mut r = r.clone();
+    for p in &s.processes {
+        let t = pref(p.pid, p.start_time_unix_ms);
+        if !r.classified.iter().any(|c| c.target == t) {
+            r.classified.push(classified(t, Kind::Other));
+        }
+    }
+    r
+}
+
+/// [`with_idle`]로 보강한 리포트로 `vh_act::plan`.
+pub fn plan_idle(
+    s: &Snapshot,
+    r: &Report,
+    sel: &vh_act::Selection,
+    policy: &vh_act::Policy,
+) -> ActionPlan {
+    vh_act::plan(s, &with_idle(s, r), sel, policy)
+}
+
+/// '안 쓰고 있음'(Idle) 사용 판정. W4 R18 이전부터 있던 테스트의 대상은 자동·일괄 정리 대상이므로 이 값을 쓴다.
+pub fn idle_usage() -> Usage {
+    Usage {
+        state: UsageState::Idle,
+        owner: OwnerState::Ended,
+        reasons: vec![
+            UsageReason::NoPeers,
+            UsageReason::CpuIdle,
+            UsageReason::DiskIdle,
+        ],
+        ..Usage::default()
     }
 }
 

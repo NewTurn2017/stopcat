@@ -1,7 +1,9 @@
 //! vh-act: 정리 계획과 단계적 종료 사다리 (ACT 소유).
 //!
 //! 사용자 맥의 프로세스에 신호를 보내는 유일한 코드다. 신호는 [`Signaler`] 구현을 거쳐서만
-//! 나가고, 보내기 전에 보호 규칙(R01~R17)과 `start_time` 재확인을 통과해야 한다.
+//! 나가고, 보내기 전에 보호 규칙(R01~R19)과 `start_time` 재확인을 통과해야 한다.
+//! W4: 계획 출처 [`PlanOrigin`]을 받아 자동·일괄 계획에서 쓰고 있는 대상(R18)과 자동 우선순위 낮추기(R19)를
+//! 거부한다.
 //! W2: `Step::Undemote`(낮춘 우선순위 되돌리기)와 Finding 없이 Demote·Undemote만 계획하는
 //! [`plan_priority`]를 더했다(지킴이 vh-guard가 쓴다).
 //! 이 크레이트는 사용자에게 묻지 않는다(확인은 CLI 몫).
@@ -23,6 +25,7 @@ mod store;
 
 use vh_model::{
     ActionOutcome, ActionPlan, Confidence, Kind, Proc, ProcRef, Refusal, Report, Snapshot, Step,
+    UsageReason, UsageState,
 };
 
 /// 어떤 Finding·대상을 실행 후보로 삼을지. CLI가 채운다.
@@ -57,6 +60,20 @@ pub struct DirectTarget {
     pub include_descendants: bool,
 }
 
+/// 계획을 누가 요청했는지(W4). R18·R19가 이 값을 본다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanOrigin {
+    /// 지킴이 자동 조치. 쓰고 있음(R18)·우선순위 낮추기(R19)를 거부한다.
+    Auto,
+    /// 사람이 '추천 모두'를 고른 일괄 정리(`vh fix` 일괄, 화면 한 키 정리). 쓰고 있음(R18)을 거부한다.
+    #[default]
+    Bulk,
+    /// 사람이 특정 대상을 직접 지목(화면 한 항목, `vh kill`, `vh fix --only`). R18로 막지 않는다
+    /// (확인 창이 [`in_use_reasons`]로 경고한다).
+    Pointed,
+}
+
 /// 실행 정책.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Policy {
@@ -71,6 +88,9 @@ pub struct Policy {
     pub total_deadline_ms: u64,
     /// 한 계획의 최대 항목 수. 기본 50.
     pub max_actions: usize,
+    /// 요청 출처(W4). 기본 Bulk(닫힌 쪽: 쓰고 있는 대상은 R18로 거부).
+    #[serde(default)]
+    pub origin: PlanOrigin,
 }
 
 impl Default for Policy {
@@ -81,8 +101,19 @@ impl Default for Policy {
             allow_demote: false,
             total_deadline_ms: 60_000,
             max_actions: 50,
+            origin: PlanOrigin::Bulk,
         }
     }
+}
+
+/// 쓰고 있다고 본 프로세스 하나와 그 근거([`in_use_reasons`]의 결과, W4).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InUse {
+    /// 쓰고 있음으로 걸린 프로세스(대상 자신 또는 스냅샷 자손).
+    pub at: ProcRef,
+    /// `Report.classified`의 사용 상태. None = 분류 없음(쓰고 있음으로 본다).
+    pub state: Option<UsageState>,
+    pub reasons: Vec<UsageReason>,
 }
 
 /// 실행 시점 생사.
@@ -356,6 +387,36 @@ pub fn plan_priority(
 /// 계획을 실행한다. 사용자에게 묻지 않는다. 결과는 `plan.items`와 같은 순서·개수.
 pub fn execute(plan: &ActionPlan, env: &ExecEnv<'_>) -> Vec<ActionOutcome> {
     exec::execute(plan, env)
+}
+
+/// 대상과 스냅샷 자손(좀비 제외) 중 처음으로 '쓰고 있음'인 것(W4). R18과 같은 판정이고, 화면의
+/// 직접 지목(Pointed) 확인 창 경고에 쓴다. 쓰고 있음 = `Usage::in_use()`(Idle이 아님, Unknown 포함)
+/// 또는 `Report.classified`에 없음. 모두 Idle이면 None.
+pub fn in_use_reasons(s: &Snapshot, r: &Report, target: ProcRef) -> Option<InUse> {
+    planner::in_use_reasons(s, r, target)
+}
+
+/// 사용 판정 근거 코드의 한국어 짧은 설명(R18 사유 문장, 화면 경고용, W4).
+pub fn usage_reason_ko(r: UsageReason) -> &'static str {
+    match r {
+        UsageReason::OwnerAlive => "주인 세션이 살아 있음",
+        UsageReason::UserOwned => "사용자가 직접 띄움",
+        UsageReason::HasTty => "터미널이 붙어 있음",
+        UsageReason::PeerOutsideSubtree => "다른 프로그램과 연결됨",
+        UsageReason::PeerExternal => "외부와 연결됨",
+        UsageReason::PeerUnresolved => "상대를 모르는 연결이 있음",
+        UsageReason::CpuActive => "CPU를 쓰는 중",
+        UsageReason::DiskActive => "디스크를 쓰는 중",
+        UsageReason::Young => "생긴 지 10분이 안 됨",
+        UsageReason::NoPeers => "연결 없음",
+        UsageReason::InfraPeersOnly => "기반 시설과만 연결됨",
+        UsageReason::CpuIdle => "CPU를 쓰지 않음",
+        UsageReason::DiskIdle => "디스크를 쓰지 않음",
+        UsageReason::LifetimeCpuLow => "평생 CPU 사용이 아주 적음",
+        UsageReason::CpuUnknown => "CPU 사용을 모름",
+        UsageReason::DiskUnknown => "디스크 사용을 모름",
+        UsageReason::PeersUnknown => "연결을 모름",
+    }
 }
 
 /// 보호 규칙 평가(순수 함수). 처음 걸린 규칙(R01→R10 순)을 돌려준다.

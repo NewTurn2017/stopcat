@@ -10,15 +10,17 @@ mod fmt;
 mod groups;
 mod health;
 mod ports;
+mod sections;
 mod signatures;
 #[cfg(feature = "synth")]
 pub mod synth;
+mod usage;
 
 use std::collections::BTreeSet;
 
 use vh_model::{
-    Classified, Confidence, Explanation, Report, SCHEMA_VERSION, Snapshot, Suggestion, Totals,
-    Usage,
+    Classified, Confidence, Explanation, Finding, Report, SCHEMA_VERSION, Section, Snapshot,
+    Suggestion, Totals,
 };
 
 use crate::ctx::Ctx;
@@ -34,6 +36,9 @@ pub fn analyze(s: &Snapshot) -> Report {
     findings.extend(port_findings);
     let (health, health_findings) = health::health(&c, &groups);
     findings.extend(health_findings);
+    for f in &mut findings {
+        sections::assign(&c, f);
+    }
     findings.sort_by(|a, b| {
         kind_order(a.kind)
             .cmp(&kind_order(b.kind))
@@ -42,9 +47,36 @@ pub fn analyze(s: &Snapshot) -> Report {
             .then_with(|| a.id.cmp(&b.id))
     });
 
+    let reclaim_set = |f: &Finding| -> BTreeSet<usize> {
+        let mut set = BTreeSet::new();
+        for t in &f.targets {
+            let Some(&i) = c.idx.get(&t.pid) else {
+                continue;
+            };
+            if c.pref(i) != *t {
+                continue;
+            }
+            set.insert(i);
+            if f.descendant_count > 0 {
+                set.extend(c.descendants(i));
+            }
+        }
+        set
+    };
     let mut confirmed = BTreeSet::new();
     let mut likely = BTreeSet::new();
+    let mut unneeded = BTreeSet::new();
+    let mut check = BTreeSet::new();
+    let mut manual = BTreeSet::new();
     for f in &findings {
+        if f.reclaim_bytes > 0 {
+            match f.section {
+                Section::Unneeded => unneeded.extend(reclaim_set(f)),
+                Section::Check => check.extend(reclaim_set(f)),
+                Section::Manual => manual.extend(reclaim_set(f)),
+                Section::Working | Section::Info => {}
+            }
+        }
         let Suggestion::Terminate {
             include_descendants,
         } = f.suggestion
@@ -69,12 +101,15 @@ pub fn analyze(s: &Snapshot) -> Report {
             }
         }
     }
+    let fp = |set: &mut dyn Iterator<Item = &usize>| -> u64 { set.map(|&i| c.footprint(i)).sum() };
     let totals = Totals {
-        reclaimable_confirmed_bytes: confirmed.iter().map(|&i| c.footprint(i)).sum(),
-        reclaimable_likely_bytes: likely.difference(&confirmed).map(|&i| c.footprint(i)).sum(),
-        unneeded_bytes: 0,
-        check_bytes: 0,
-        manual_bytes: 0,
+        reclaimable_confirmed_bytes: fp(&mut confirmed.iter()),
+        reclaimable_likely_bytes: fp(&mut likely.difference(&confirmed)),
+        unneeded_bytes: fp(&mut unneeded.iter()),
+        check_bytes: fp(&mut check.difference(&unneeded)),
+        manual_bytes: fp(&mut manual
+            .iter()
+            .filter(|i| !unneeded.contains(i) && !check.contains(i))),
     };
 
     let mut order: Vec<usize> = (0..c.procs.len()).collect();
@@ -94,7 +129,7 @@ pub fn analyze(s: &Snapshot) -> Report {
                 owner_source: o.source.map(str::to_string),
                 owner_label_ko: o.label.clone(),
                 owner_alive: o.alive,
-                usage: Usage::default(),
+                usage: c.usage[i].clone(),
             }
         })
         .collect();

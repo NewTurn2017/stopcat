@@ -1,7 +1,8 @@
 #![allow(dead_code)]
 
+use vh_act::{PlanOrigin, Policy, PriorityTarget};
 use vh_guard::fake::*;
-use vh_guard::{AutoLevel, GuardEvent, GuardEventKind, GuardPolicy};
+use vh_guard::{AutoLevel, GuardEvent, GuardEventKind, GuardPolicy, GuardUpdate};
 use vh_model::*;
 
 pub const SELF_PID: i32 = 4_000_000;
@@ -106,4 +107,21 @@ pub fn kinds(events: &[GuardEvent]) -> Vec<GuardEventKind> {
 
 pub fn count(events: &[GuardEvent], k: GuardEventKind) -> usize {
     events.iter().filter(|e| e.kind == k).count()
+}
+
+/// 화면에서 직접 고른 우선순위 낮추기(Pointed)와 같은 계획. W4부터 자동 낮추기가 없어 낮춘 상태는 이것으로 만든다.
+pub fn demote_plan(u: &GuardUpdate, targets: &[ProcRef]) -> ActionPlan {
+    let pt: Vec<PriorityTarget> = targets
+        .iter()
+        .map(|t| PriorityTarget {
+            target: *t,
+            step: Step::Demote,
+            reason_ko: "직접 낮춤".to_string(),
+        })
+        .collect();
+    let policy = Policy {
+        origin: PlanOrigin::Pointed,
+        ..Policy::default()
+    };
+    vh_act::plan_priority(&u.snapshot, Some(&u.report), &pt, &policy)
 }

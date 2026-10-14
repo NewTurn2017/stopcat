@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use vh_model::{ExeOrigin, Kind, Proc, ProcRef, ProcStatus, Snapshot, display_path};
+use vh_model::{ExeOrigin, Kind, Proc, ProcRef, ProcStatus, Snapshot, Usage, display_path};
 
 use crate::features::{Feat, features};
 use crate::signatures::{Class, classify};
@@ -64,6 +64,8 @@ pub(crate) struct Ctx<'a> {
     pub owner: Vec<Owner>,
     pub project: Vec<Option<String>>,
     pub tmp_cwd: Vec<bool>,
+    /// 사용 판정(`crate::usage::compute`). 모든 표와 같은 인덱스.
+    pub usage: Vec<Usage>,
 }
 
 const DAEMON_BY_DESIGN: &[&str] = &[
@@ -222,8 +224,10 @@ impl<'a> Ctx<'a> {
             owner: Vec::new(),
             project,
             tmp_cwd,
+            usage: Vec::new(),
         };
         ctx.owner = (0..n).map(|i| ctx.compute_owner(i)).collect();
+        ctx.usage = crate::usage::compute(&ctx);
         ctx
     }
 

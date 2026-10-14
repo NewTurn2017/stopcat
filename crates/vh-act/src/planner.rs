@@ -5,12 +5,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use vh_model::{
     ActionPlan, Kind, PlannedAction, Proc, ProcRef, ProcStatus, Refusal, Report, Snapshot, Step,
-    Suggestion,
+    Suggestion, Usage,
 };
 
 use crate::protect::{check, refusal};
 use crate::rule::*;
-use crate::{Policy, PriorityTarget, ProtectCtx, Selection};
+use crate::{InUse, PlanOrigin, Policy, PriorityTarget, ProtectCtx, Selection, usage_reason_ko};
 
 const MAX_ANCESTORS: usize = 64;
 const MAX_SUBTREE: usize = 4096;
@@ -107,6 +107,75 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+fn in_use_at(
+    usage: &HashMap<ProcRef, &Usage>,
+    target: ProcRef,
+    subtree: &[&Proc],
+) -> Option<InUse> {
+    let nodes = std::iter::once(target).chain(
+        subtree
+            .iter()
+            .filter(|p| p.status != ProcStatus::Zombie)
+            .map(|p| pref(p)),
+    );
+    for at in nodes {
+        match usage.get(&at) {
+            None => {
+                return Some(InUse {
+                    at,
+                    state: None,
+                    reasons: Vec::new(),
+                });
+            }
+            Some(u) if u.in_use() => {
+                return Some(InUse {
+                    at,
+                    state: Some(u.state),
+                    reasons: u.reasons.clone(),
+                });
+            }
+            Some(_) => {}
+        }
+    }
+    None
+}
+
+fn usage_map(r: &Report) -> HashMap<ProcRef, &Usage> {
+    r.classified.iter().map(|c| (c.target, &c.usage)).collect()
+}
+
+pub(crate) fn in_use_reasons(s: &Snapshot, r: &Report, target: ProcRef) -> Option<InUse> {
+    let idx = SnapIndex::new(s);
+    let subtree = match idx.get(target) {
+        Some(_) => idx.subtree(target.pid),
+        None => Vec::new(),
+    };
+    in_use_at(&usage_map(r), target, &subtree)
+}
+
+fn in_use_refusal(u: &InUse, target: ProcRef) -> Refusal {
+    let grounds = if u.state.is_none() {
+        "사용 판정이 없음".to_string()
+    } else if u.reasons.is_empty() {
+        "사용 여부를 모름".to_string()
+    } else {
+        let ko: Vec<&str> = u.reasons.iter().map(|r| usage_reason_ko(*r)).collect();
+        ko.join(", ")
+    };
+    let who = if u.at == target {
+        String::new()
+    } else {
+        format!("자손 pid {}: ", u.at.pid)
+    };
+    refusal(
+        target,
+        R18_IN_USE,
+        &format!(
+            "쓰고 있는 프로세스예요({who}{grounds}). 자동·일괄 정리에서는 끄지 않아요. 직접 지목하면 경고 뒤 정리할 수 있어요"
+        ),
+    )
+}
+
 fn not_actionable_reason(s: &Suggestion) -> &'static str {
     match s {
         Suggestion::HandoffThenRestart => {
@@ -137,6 +206,7 @@ pub(crate) fn plan(s: &Snapshot, r: &Report, sel: &Selection, policy: &Policy) -
         }
     };
 
+    let usage = usage_map(r);
     let mut cands: Vec<Candidate> = Vec::new();
     if !sel.direct.is_empty() {
         for d in &sel.direct {
@@ -248,6 +318,21 @@ pub(crate) fn plan(s: &Snapshot, r: &Report, sel: &Selection, policy: &Policy) -
             refuse(rf);
             continue;
         }
+        if c.act == Act::Demote && policy.origin == PlanOrigin::Auto {
+            refuse(refusal(
+                c.target,
+                R19_AUTO_DEMOTE_OFF,
+                "자동으로는 우선순위를 낮추지 않아요. 화면에서 직접 고를 때만 낮춰요",
+            ));
+            continue;
+        }
+        if matches!(c.act, Act::Terminate { .. })
+            && policy.origin != PlanOrigin::Pointed
+            && let Some(u) = in_use_at(&usage, c.target, &subtree)
+        {
+            refuse(in_use_refusal(&u, c.target));
+            continue;
+        }
         let (steps, include, reclaim) = match c.act {
             Act::Terminate {
                 include_descendants,
@@ -336,6 +421,14 @@ pub(crate) fn plan_priority(
                 continue;
             }
         };
+        if t.step == Step::Demote && policy.origin == PlanOrigin::Auto {
+            refused.push(refusal(
+                t.target,
+                R19_AUTO_DEMOTE_OFF,
+                "자동으로는 우선순위를 낮추지 않아요. 화면에서 직접 고를 때만 낮춰요",
+            ));
+            continue;
+        }
         let snap = idx.get(t.target);
         if t.step == Step::Demote && snap.is_none() {
             refused.push(refusal(

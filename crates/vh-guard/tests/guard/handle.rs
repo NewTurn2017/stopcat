@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use vh_act::PlanOrigin;
 use vh_guard::fake::*;
 use vh_guard::{AutoLevel, GuardCommand, GuardEventKind, GuardHandle, GuardUpdate, UpdateReceiver};
 use vh_model::*;
@@ -28,16 +29,19 @@ fn demoted_scene() -> (Scene, ProcRef) {
     (sc, r)
 }
 
-/// 폭주 자식을 4번 스캔해 Demote까지 만든다(ScanNow 4회, 각 갱신을 기다림).
+/// 첫 갱신을 받아 201을 화면 직접 낮추기(RunPlan, Pointed)로 낮춘다(W4: 자동 낮추기 없음).
 fn drive_to_demote(h: &GuardHandle, rx: &UpdateReceiver, clock: &FakeClock) -> GuardUpdate {
     let first = next(rx);
     assert_eq!(first.status.scan_seq, 1);
-    let mut last = first;
-    for _ in 0..3 {
-        clock.advance(5000);
-        h.scan_now().unwrap();
-        last = next(rx);
-    }
+    clock.advance(5000);
+    let r = ProcRef {
+        pid: 201,
+        start_time_unix_ms: OLD,
+    };
+    let plan = demote_plan(&first, &[r]);
+    h.run_plan_as(1, plan, first.snapshot.clone(), PlanOrigin::Pointed)
+        .unwrap();
+    let last = next(rx);
     assert_eq!(last.status.demoted.len(), 1, "{:?}", last.status);
     last
 }
@@ -89,8 +93,7 @@ fn scan_now_triggers_scan_and_commands_return_status_updates() {
 #[test]
 fn shutdown_restores_demoted_joins_and_then_send_fails() {
     let (sc, r) = demoted_scene();
-    let (mut be, probe, clock) = backend(&sc);
-    be.cpu_rate_pct.insert(201, 200.0);
+    let (be, probe, clock) = backend(&sc);
     let (h, rx) = GuardHandle::spawn(safe(), be);
     drive_to_demote(&h, &rx, &clock);
     assert_eq!(probe.log.demoted(), vec![201]);
@@ -111,8 +114,7 @@ fn shutdown_restores_demoted_joins_and_then_send_fails() {
 #[test]
 fn drop_without_shutdown_still_restores() {
     let (sc, _r) = demoted_scene();
-    let (mut be, probe, clock) = backend(&sc);
-    be.cpu_rate_pct.insert(201, 200.0);
+    let (be, probe, clock) = backend(&sc);
     let (h, rx) = GuardHandle::spawn(safe(), be);
     drive_to_demote(&h, &rx, &clock);
     drop(h);
@@ -127,8 +129,7 @@ fn drop_without_shutdown_still_restores() {
 #[test]
 fn receiver_dropped_makes_thread_restore_and_exit() {
     let (sc, _r) = demoted_scene();
-    let (mut be, probe, clock) = backend(&sc);
-    be.cpu_rate_pct.insert(201, 200.0);
+    let (be, probe, clock) = backend(&sc);
     let (h, rx) = GuardHandle::spawn(safe(), be);
     drive_to_demote(&h, &rx, &clock);
     drop(rx);
@@ -141,8 +142,7 @@ fn receiver_dropped_makes_thread_restore_and_exit() {
 #[test]
 fn scan_panic_becomes_scan_error_thread_survives_and_restores_on_shutdown() {
     let (sc, _r) = demoted_scene();
-    let (mut be, probe, clock) = backend(&sc);
-    be.cpu_rate_pct.insert(201, 200.0);
+    let (be, probe, clock) = backend(&sc);
     let (h, rx) = GuardHandle::spawn(safe(), be);
     drive_to_demote(&h, &rx, &clock);
     probe.set_collect_panic(true);

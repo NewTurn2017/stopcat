@@ -88,10 +88,21 @@
    "footprint_bytes": 314572800,
    "rss_bytes": 157286400,
    "cpu_time_ns": 1000000,
-   "cpu_pct": null,
+   "cpu_pct": 0.0,
    "threads": 4,
    "nice": 0,
-   "translated": false
+   "translated": false,
+   "tcp": {
+    "established": 0,
+    "loopback": 0,
+    "external": 0,
+    "unresolved": 0,
+    "peer_pids": [],
+    "peer_pids_truncated": false
+   },
+   "disk_read_bytes": 0,
+   "disk_written_bytes": 0,
+   "disk_io_delta_bytes": 0
   },
   {
    "pid": 310,
@@ -113,10 +124,21 @@
    "footprint_bytes": 5242880,
    "rss_bytes": 2621440,
    "cpu_time_ns": 1000000,
-   "cpu_pct": null,
+   "cpu_pct": 0.0,
    "threads": 4,
    "nice": 0,
-   "translated": false
+   "translated": false,
+   "tcp": {
+    "established": 0,
+    "loopback": 0,
+    "external": 0,
+    "unresolved": 0,
+    "peer_pids": [],
+    "peer_pids_truncated": false
+   },
+   "disk_read_bytes": 0,
+   "disk_written_bytes": 0,
+   "disk_io_delta_bytes": 0
   },
   {
    "pid": 99999,
@@ -138,10 +160,21 @@
    "footprint_bytes": 10485760,
    "rss_bytes": 5242880,
    "cpu_time_ns": 1000000,
-   "cpu_pct": null,
+   "cpu_pct": 0.0,
    "threads": 4,
    "nice": 0,
-   "translated": false
+   "translated": false,
+   "tcp": {
+    "established": 0,
+    "loopback": 0,
+    "external": 0,
+    "unresolved": 0,
+    "peer_pids": [],
+    "peer_pids_truncated": false
+   },
+   "disk_read_bytes": 0,
+   "disk_written_bytes": 0,
+   "disk_io_delta_bytes": 0
   },
   {
    "pid": 1300,
@@ -171,10 +204,21 @@
    "footprint_bytes": 314572800,
    "rss_bytes": 157286400,
    "cpu_time_ns": 1000000,
-   "cpu_pct": null,
+   "cpu_pct": 0.0,
    "threads": 4,
    "nice": 0,
-   "translated": false
+   "translated": false,
+   "tcp": {
+    "established": 0,
+    "loopback": 0,
+    "external": 0,
+    "unresolved": 0,
+    "peer_pids": [],
+    "peer_pids_truncated": false
+   },
+   "disk_read_bytes": 0,
+   "disk_written_bytes": 0,
+   "disk_io_delta_bytes": 0
   },
   {
    "pid": 1301,
@@ -198,10 +242,21 @@
    "footprint_bytes": 20971520,
    "rss_bytes": 10485760,
    "cpu_time_ns": 1000000,
-   "cpu_pct": null,
+   "cpu_pct": 0.0,
    "threads": 4,
    "nice": 0,
-   "translated": false
+   "translated": false,
+   "tcp": {
+    "established": 0,
+    "loopback": 0,
+    "external": 0,
+    "unresolved": 0,
+    "peer_pids": [],
+    "peer_pids_truncated": false
+   },
+   "disk_read_bytes": 0,
+   "disk_written_bytes": 0,
+   "disk_io_delta_bytes": 0
   },
   {
    "pid": 1302,
@@ -227,10 +282,21 @@
    "footprint_bytes": 419430400,
    "rss_bytes": 209715200,
    "cpu_time_ns": 1000000,
-   "cpu_pct": null,
+   "cpu_pct": 0.0,
    "threads": 4,
    "nice": 0,
-   "translated": false
+   "translated": false,
+   "tcp": {
+    "established": 0,
+    "loopback": 0,
+    "external": 0,
+    "unresolved": 0,
+    "peer_pids": [],
+    "peer_pids_truncated": false
+   },
+   "disk_read_bytes": 0,
+   "disk_written_bytes": 0,
+   "disk_io_delta_bytes": 0
   },
   {
    "pid": 1303,
@@ -254,10 +320,21 @@
    "footprint_bytes": 62914560,
    "rss_bytes": 31457280,
    "cpu_time_ns": 1000000,
-   "cpu_pct": null,
+   "cpu_pct": 0.0,
    "threads": 4,
    "nice": 0,
-   "translated": false
+   "translated": false,
+   "tcp": {
+    "established": 0,
+    "loopback": 0,
+    "external": 0,
+    "unresolved": 0,
+    "peer_pids": [],
+    "peer_pids_truncated": false
+   },
+   "disk_read_bytes": 0,
+   "disk_written_bytes": 0,
+   "disk_io_delta_bytes": 0
   },
   {
    "pid": 1304,
@@ -280,10 +357,21 @@
    "footprint_bytes": 83886080,
    "rss_bytes": 41943040,
    "cpu_time_ns": 1000000,
-   "cpu_pct": null,
+   "cpu_pct": 0.0,
    "threads": 4,
    "nice": 0,
-   "translated": false
+   "translated": false,
+   "tcp": {
+    "established": 0,
+    "loopback": 0,
+    "external": 0,
+    "unresolved": 0,
+    "peer_pids": [],
+    "peer_pids_truncated": false
+   },
+   "disk_read_bytes": 0,
+   "disk_written_bytes": 0,
+   "disk_io_delta_bytes": 0
   },
   {
    "pid": 1305,
@@ -309,10 +397,21 @@
    "footprint_bytes": 20971520,
    "rss_bytes": 10485760,
    "cpu_time_ns": 1000000,
-   "cpu_pct": null,
+   "cpu_pct": 0.0,
    "threads": 4,
    "nice": 0,
-   "translated": false
+   "translated": false,
+   "tcp": {
+    "established": 0,
+    "loopback": 0,
+    "external": 0,
+    "unresolved": 0,
+    "peer_pids": [],
+    "peer_pids_truncated": false
+   },
+   "disk_read_bytes": 0,
+   "disk_written_bytes": 0,
+   "disk_io_delta_bytes": 0
   }
  ],
  "listeners": [],

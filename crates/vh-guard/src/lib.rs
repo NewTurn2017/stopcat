@@ -22,6 +22,7 @@ pub mod mailbox;
 pub mod memory;
 pub mod notify;
 pub mod snap;
+pub mod stability;
 
 pub use vh_model::{
     AutoLevel, DemotedProc, GuardEvent, GuardEventKind, GuardPolicy, GuardStatus, PendingAction,
@@ -41,6 +42,7 @@ pub use memory::{CpuStreak, Demoted, GuardMemory, Streak};
 pub use notify::{
     Notifier, NotifyBatcher, NullNotifier, OsascriptNotifier, notify_name, osascript_argv,
 };
+pub use stability::forced_health_from;
 
 /// 환경 변수 이름.
 pub mod env {
@@ -52,4 +54,6 @@ pub mod env {
     pub const E2E_ALLOW_PIDS: &str = "VH_E2E_ALLOW_PIDS";
     /// 상태 폴더(vh-act와 같다).
     pub const STATE_DIR: &str = "VH_STATE_DIR";
+    /// 시험용 강제 불안정 `watch|critical`. `VH_E2E_ALLOW_PIDS`가 있을 때만 읽는다(W4).
+    pub const E2E_FORCE_HEALTH: &str = "VH_E2E_FORCE_HEALTH";
 }

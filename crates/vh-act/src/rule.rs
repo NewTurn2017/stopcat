@@ -18,3 +18,7 @@ pub const R15_RUNTIME_CHILD_GUARD: &str = "R15_runtime_child_guard";
 pub const R16_MAX_ACTIONS: &str = "R16_max_actions";
 /// `plan_priority`에 Demote·Undemote가 아닌 단계를 넣었다(W2).
 pub const R17_PRIORITY_STEP_ONLY: &str = "R17_priority_step_only";
+/// 자동·일괄(`PlanOrigin::Auto`·`Bulk`) 종료 계획에서 대상이나 자손이 쓰고 있음(`Usage::in_use()`, 분류 없음 포함)(W4).
+pub const R18_IN_USE: &str = "R18_in_use";
+/// 자동(`PlanOrigin::Auto`) 계획의 우선순위 낮추기(W4).
+pub const R19_AUTO_DEMOTE_OFF: &str = "R19_auto_demote_off";

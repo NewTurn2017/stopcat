@@ -33,7 +33,7 @@ impl Fx {
                 .collect(),
             ..Selection::default()
         };
-        plan(&self.snap, &self.rep, &sel, &Policy::default())
+        plan_idle(&self.snap, &self.rep, &sel, &Policy::default())
     }
 }
 
@@ -330,7 +330,7 @@ fn act1_full_selection_skips_non_actionable_silently() {
         min_confidence: Confidence::Possible,
         ..Selection::default()
     };
-    let p = plan(&fx.snap, &fx.rep, &sel, &Policy::default());
+    let p = plan_idle(&fx.snap, &fx.rep, &sel, &Policy::default());
     assert_eq!(ids(&p), vec!["term", "resume"]);
     assert!(p.refused.is_empty(), "{:?}", p.refused);
     assert_eq!(p.items[0].steps, vec![Step::Term, Step::Kill]);
@@ -352,7 +352,7 @@ fn r11_explicit_finding_ids_refuse_non_actionable() {
         min_confidence: Confidence::Possible,
         ..Selection::default()
     };
-    let p = plan(&fx.snap, &fx.rep, &sel, &Policy::default());
+    let p = plan_idle(&fx.snap, &fx.rep, &sel, &Policy::default());
     assert!(p.items.is_empty());
     assert_eq!(p.refused.len(), 4);
     assert!(
@@ -370,7 +370,7 @@ fn r11_pointed_review_becomes_terminate() {
         min_confidence: Confidence::Possible,
         ..Selection::default()
     };
-    let p = plan(&fx.snap, &fx.rep, &sel, &Policy::default());
+    let p = plan_idle(&fx.snap, &fx.rep, &sel, &Policy::default());
     assert_eq!(ids(&p), vec!["review"]);
     assert_eq!(p.items[0].steps, vec![Step::Term, Step::Kill]);
     assert!(!p.items[0].include_descendants);
@@ -379,7 +379,7 @@ fn r11_pointed_review_becomes_terminate() {
         include_descendants: Some(true),
         ..Policy::default()
     };
-    let p = plan(&fx.snap, &fx.rep, &sel, &tree);
+    let p = plan_idle(&fx.snap, &fx.rep, &sel, &tree);
     assert!(p.items[0].include_descendants);
 
     let r = run_fake(&fx, &p, world_from(&fx.snap), Vec::new());
@@ -395,7 +395,7 @@ fn r11_pointed_handoff_restartparent_none_still_refused() {
         min_confidence: Confidence::Possible,
         ..Selection::default()
     };
-    let p = plan(&fx.snap, &fx.rep, &sel, &Policy::default());
+    let p = plan_idle(&fx.snap, &fx.rep, &sel, &Policy::default());
     assert!(p.items.is_empty());
     for pid in [2003, 2005, 2006] {
         let r = p.refused.iter().find(|r| r.target.pid == pid).unwrap();
@@ -412,7 +412,7 @@ fn r12_demote_needs_flag() {
         finding_ids: vec!["demote".into()],
         ..Selection::default()
     };
-    let p = plan(&fx.snap, &fx.rep, &explicit, &Policy::default());
+    let p = plan_idle(&fx.snap, &fx.rep, &explicit, &Policy::default());
     assert!(p.items.is_empty());
     assert_eq!(
         refused_rule(&p, pref(2001, 11)).as_deref(),
@@ -423,7 +423,7 @@ fn r12_demote_needs_flag() {
         allow_demote: true,
         ..Policy::default()
     };
-    let p = plan(&fx.snap, &fx.rep, &explicit, &allow);
+    let p = plan_idle(&fx.snap, &fx.rep, &explicit, &allow);
     assert_eq!(p.items[0].steps, vec![Step::Demote]);
     let r = run_fake(&fx, &p, world_from(&fx.snap), Vec::new());
     assert_eq!(*r.sig.demoted.borrow(), vec![2001]);
@@ -439,14 +439,14 @@ fn r13_below_confidence_excluded_silently() {
         min_confidence: Confidence::Likely,
         ..Selection::default()
     };
-    let p = plan(&fx.snap, &fx.rep, &sel, &Policy::default());
+    let p = plan_idle(&fx.snap, &fx.rep, &sel, &Policy::default());
     assert!(p.items.is_empty());
     assert!(p.refused.is_empty());
     let confirmed = Selection {
         min_confidence: Confidence::Confirmed,
         ..Selection::default()
     };
-    let p = plan(&fx.snap, &fx.rep, &confirmed, &Policy::default());
+    let p = plan_idle(&fx.snap, &fx.rep, &confirmed, &Policy::default());
     assert_eq!(ids(&p), vec!["term", "resume"]);
     let _ = R13_BELOW_CONFIDENCE;
 }
@@ -464,7 +464,7 @@ fn act1_only_pid_and_no_descendants_override() {
         total_deadline_ms: 9_000,
         ..Policy::default()
     };
-    let p = plan(&fx.snap, &fx.rep, &sel, &no_desc);
+    let p = plan_idle(&fx.snap, &fx.rep, &sel, &no_desc);
     assert_eq!(ids(&p), vec!["term"]);
     assert!(!p.items[0].include_descendants);
     assert_eq!(p.items[0].grace_ms, 1234);
@@ -505,7 +505,7 @@ fn act1_descendant_count_reclaim_overlap_and_max_actions() {
             ),
         ],
     );
-    let p = plan(&fx.snap, &fx.rep, &Selection::default(), &Policy::default());
+    let p = plan_idle(&fx.snap, &fx.rep, &Selection::default(), &Policy::default());
     assert_eq!(ids(&p), vec!["parent", "other"]);
     assert_eq!(p.items[0].descendant_count, 2);
     assert_eq!(p.items[0].est_reclaim_bytes, 3_000_000);
@@ -515,7 +515,7 @@ fn act1_descendant_count_reclaim_overlap_and_max_actions() {
         max_actions: 1,
         ..Policy::default()
     };
-    let p = plan(&fx.snap, &fx.rep, &Selection::default(), &one);
+    let p = plan_idle(&fx.snap, &fx.rep, &Selection::default(), &one);
     assert_eq!(ids(&p), vec!["parent"]);
     assert_eq!(
         refused_rule(&p, pref(3000, 7)).as_deref(),
@@ -568,7 +568,7 @@ fn r16_items_over_max_actions_are_refused_not_dropped() {
         max_actions: 3,
         ..Policy::default()
     };
-    let p = plan(&fx.snap, &fx.rep, &Selection::default(), &policy);
+    let p = plan_idle(&fx.snap, &fx.rep, &Selection::default(), &policy);
     assert_eq!(ids(&p), vec!["f0", "f1", "f2"]);
     let cut: Vec<(i32, &str, &str)> = p
         .refused
@@ -669,7 +669,7 @@ fn r15_runtime_children_need_guard_and_later_start() {
 #[test]
 fn t12_fork_during_ladder_new_child_gets_term_then_kill() {
     let fx = Fx::new(vec![user(2000, 1, 100)]);
-    let p = plan(
+    let p = plan_idle(
         &fx.snap,
         &fx.rep,
         &Selection {
@@ -709,7 +709,7 @@ fn t12_fork_during_ladder_new_child_gets_term_then_kill() {
 #[test]
 fn total_deadline_skips_remaining_items() {
     let fx = Fx::new(vec![user(2000, 1, 7), user(2001, 1, 8)]);
-    let p = plan(
+    let p = plan_idle(
         &fx.snap,
         &fx.rep,
         &Selection {

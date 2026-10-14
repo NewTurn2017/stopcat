@@ -8,9 +8,10 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+use vh_act::PlanOrigin;
 use vh_model::{
-    ActionOutcome, ActionPlan, AutoLevel, GuardEvent, GuardPolicy, GuardStatus, ProcRef, Report,
-    Snapshot,
+    ActionOutcome, ActionPlan, AutoLevel, GuardEvent, GuardPolicy, GuardStatus, ProcRef, Refusal,
+    Report, Snapshot,
 };
 
 use crate::backend::GuardBackend;
@@ -28,10 +29,13 @@ pub enum GuardCommand {
     UndoDemote(ProcRef),
     ScanNow,
     /// 화면에서 사용자가 확인한 정리. 자동 종료 속도 제한에는 세지 않고, 그 Demote는 종료 때 되돌린다.
+    /// `origin`이 Pointed가 아니면(Bulk·Auto) 실행 직전에 지킴이의 최신 판정으로 R18(쓰고 있음)을 다시 보고
+    /// 걸린 항목은 실행하지 않는다(`ManualRunResult.refused`). 미리보기와 `y` 사이에 쓰기 시작한 것을 막는다.
     RunPlan {
         request_id: u64,
         plan: ActionPlan,
         snapshot: Arc<Snapshot>,
+        origin: PlanOrigin,
     },
     /// 낮춘 것을 되돌리고 스레드를 끝낸다.
     Shutdown,
@@ -43,6 +47,8 @@ pub struct ManualRunResult {
     pub request_id: u64,
     pub outcomes: Vec<ActionOutcome>,
     pub state_dir: PathBuf,
+    /// 실행 직전 다시 본 R18로 빠진 항목(W4). Pointed면 언제나 비어 있다.
+    pub refused: Vec<Refusal>,
 }
 
 /// 지킴이 → 화면. 스캔마다 하나, 명령 처리 뒤에도 하나(스냅샷·리포트는 마지막 것을 공유).
@@ -161,16 +167,29 @@ impl GuardHandle {
         self.send(GuardCommand::ScanNow)
     }
 
+    /// 출처 Bulk(닫힌 쪽)로 [`GuardHandle::run_plan_as`].
     pub fn run_plan(
         &self,
         request_id: u64,
         plan: ActionPlan,
         snapshot: Arc<Snapshot>,
     ) -> Result<(), GuardGone> {
+        self.run_plan_as(request_id, plan, snapshot, PlanOrigin::Bulk)
+    }
+
+    /// 화면에서 확인한 정리를 출처와 함께 보낸다(직접 지목은 `PlanOrigin::Pointed`).
+    pub fn run_plan_as(
+        &self,
+        request_id: u64,
+        plan: ActionPlan,
+        snapshot: Arc<Snapshot>,
+        origin: PlanOrigin,
+    ) -> Result<(), GuardGone> {
         self.send(GuardCommand::RunPlan {
             request_id,
             plan,
             snapshot,
+            origin,
         })
     }
 

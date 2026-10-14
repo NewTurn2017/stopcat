@@ -2,7 +2,7 @@ mod common;
 
 use common::*;
 use vh_analyze::{analyze, explain_pid};
-use vh_model::{Confidence, FindingKind, HealthLevel, Kind, Suggestion};
+use vh_model::{Confidence, FindingKind, HealthLevel, Kind, Section, Suggestion};
 
 const MIB: u64 = 1024 * 1024;
 
@@ -142,7 +142,10 @@ fn duplicate_in_same_session() {
     assert_eq!(d.len(), 2, "{d:#?}");
     let mcp = one(&r, FindingKind::Duplicate, 5010);
     assert_eq!(mcp.confidence, Confidence::Likely);
-    assert_eq!(mcp.suggestion, terminate(true));
+    // W4 PM 판정 B: 주인(세션)이 살아 있고 안 쓰는 듯 → check·Review(구역표 그대로).
+    assert_eq!(mcp.section, Section::Check);
+    assert_eq!(mcp.suggestion, Suggestion::Review);
+    assert!(has_reason(mcp, "owner_present"));
     assert!(has_reason(mcp, "same_owner_session"));
     assert_eq!(mcp.targets.len(), 1);
     let next = one(&r, FindingKind::Duplicate, 5020);
@@ -320,7 +323,15 @@ fn runaway_cpu() {
     assert_eq!(f.len(), 1, "{f:#?}");
     assert_eq!(f[0].targets[0].pid, 1500);
     assert_eq!(f[0].confidence, Confidence::Possible);
-    assert_eq!(f[0].suggestion, Suggestion::Demote);
+    // W4(Q1 a): 우선순위 낮추기 제안 없음. 주인 모름 + CPU 사용 → check(PM 판정 S3).
+    assert_eq!(f[0].section, Section::Check);
+    assert_eq!(f[0].suggestion, Suggestion::Review);
+    assert!(has_reason(f[0], "owner_gone_or_unknown"));
+    assert!(
+        r.findings
+            .iter()
+            .all(|x| x.suggestion != Suggestion::Demote)
+    );
 }
 
 #[test]

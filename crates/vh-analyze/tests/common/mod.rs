@@ -3,7 +3,10 @@
 use std::collections::BTreeSet;
 
 use vh_analyze::analyze;
-use vh_model::{Classified, Finding, FindingKind, Kind, Report, Snapshot, Suggestion};
+use vh_model::{
+    Classified, Finding, FindingKind, Kind, ProcStatus, Report, Section, Snapshot, Suggestion,
+    UsageState,
+};
 
 pub fn raw(name: &str) -> String {
     let path = format!("{}/tests/fixtures/{name}.json", env!("CARGO_MANIFEST_DIR"));
@@ -100,7 +103,50 @@ pub fn check_invariants(s: &Snapshot, r: &Report) {
             );
         }
         assert!(!f.short_ko.is_empty() && !f.title_ko.is_empty());
+        // W4: Terminate는 unneeded에만, unneeded 대상은 모두 Idle, 낮추기 제안 없음.
+        if let Suggestion::Terminate { .. } = f.suggestion {
+            assert_eq!(
+                f.section,
+                Section::Unneeded,
+                "Terminate는 unneeded에만: {f:#?}"
+            );
+        }
+        if f.section == Section::Unneeded {
+            for t in &f.targets {
+                let c = r.classified.iter().find(|c| c.target == *t).unwrap();
+                assert_eq!(
+                    c.usage.state,
+                    UsageState::Idle,
+                    "unneeded 대상은 Idle: {c:?}"
+                );
+            }
+        }
+        assert_ne!(
+            f.suggestion,
+            Suggestion::Demote,
+            "W4 분석은 낮추기 제안을 만들지 않음"
+        );
+        if matches!(
+            f.kind,
+            FindingKind::MemoryPressure
+                | FindingKind::LimitNearing
+                | FindingKind::ExposedListener
+                | FindingKind::KnownPortConflict
+        ) {
+            assert_eq!(f.section, Section::Info);
+        }
     }
+    let own_total: u64 = s
+        .processes
+        .iter()
+        .filter(|p| p.uid == s.self_uid && p.status != ProcStatus::Zombie)
+        .map(|p| p.footprint_bytes.unwrap_or(0))
+        .sum();
+    let t = &r.totals;
+    assert!(
+        t.unneeded_bytes + t.check_bytes + t.manual_bytes <= own_total,
+        "구역 확보량 합 ≤ 전체: {t:?}"
+    );
     let again = analyze(s);
     assert_eq!(&again, r, "같은 입력은 같은 Report");
     let mut groups = 0usize;

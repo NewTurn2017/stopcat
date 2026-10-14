@@ -11,8 +11,9 @@ use vh_act::{
     ExecEnv, FakeWorld, LiveProc, Liveness, Policy, PriorityTarget, Prober, Selection, Signaler,
 };
 use vh_model::{
-    ActionOutcome, ActionPlan, Classified, Confidence, Finding, FindingKind, Kind, Proc, ProcRef,
-    ProcStatus, Report, Section, Snapshot, Suggestion, Usage,
+    ActionOutcome, ActionPlan, Classified, Confidence, Finding, FindingKind, HealthLevel, Kind,
+    OwnerState, Proc, ProcRef, ProcStatus, Report, Section, Snapshot, Suggestion, Usage,
+    UsageReason, UsageState,
 };
 
 use crate::backend::GuardBackend;
@@ -252,6 +253,8 @@ pub struct Probe {
     pub collect_panic: Arc<Mutex<bool>>,
     pub collects: Arc<AtomicU64>,
     pub state_dir: PathBuf,
+    /// `GuardBackend::forced_health`가 돌려주는 값(스캔 사이에 바꿀 수 있다).
+    pub forced_health: Arc<Mutex<Option<HealthLevel>>>,
 }
 
 impl Probe {
@@ -273,6 +276,10 @@ impl Probe {
 
     pub fn set_collect_panic(&self, on: bool) {
         *self.collect_panic.lock().unwrap() = on;
+    }
+
+    pub fn set_forced_health(&self, h: Option<HealthLevel>) {
+        *self.forced_health.lock().unwrap() = h;
     }
 }
 
@@ -313,6 +320,7 @@ impl FakeGuardBackend {
             collect_panic: Arc::new(Mutex::new(false)),
             collects: Arc::default(),
             state_dir: dir.path().to_path_buf(),
+            forced_health: Arc::default(),
         };
         let prober = SyncProber {
             world: world.clone(),
@@ -473,6 +481,10 @@ impl GuardBackend for FakeGuardBackend {
     fn state_dir(&self) -> &Path {
         &self.probe.state_dir
     }
+
+    fn forced_health(&self) -> Option<HealthLevel> {
+        *self.probe.forced_health.lock().unwrap()
+    }
 }
 
 pub fn pref(p: &Proc) -> ProcRef {
@@ -536,7 +548,33 @@ pub fn classified(
         owner_source: None,
         owner_label_ko: None,
         owner_alive,
-        usage: Usage::default(),
+        usage: fixture_usage(owner_alive),
+    }
+}
+
+/// 합성 분류의 사용 판정: 주인 생존이면 Active(owner_alive), 아니면 Idle(연결·CPU·디스크 없음).
+pub fn fixture_usage(owner_alive: Option<bool>) -> Usage {
+    if owner_alive == Some(true) {
+        return Usage {
+            state: UsageState::Active,
+            owner: OwnerState::Alive,
+            reasons: vec![UsageReason::OwnerAlive],
+            ..Usage::default()
+        };
+    }
+    Usage {
+        state: UsageState::Idle,
+        owner: if owner_alive == Some(false) {
+            OwnerState::Ended
+        } else {
+            OwnerState::Unknown
+        },
+        reasons: vec![
+            UsageReason::NoPeers,
+            UsageReason::CpuIdle,
+            UsageReason::DiskIdle,
+        ],
+        ..Usage::default()
     }
 }
 
